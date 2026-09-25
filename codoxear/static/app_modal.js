@@ -24,12 +24,16 @@
     });
   }
 
-  // Modal-open focus contract: an opened modal focuses its surface, never a
-  // control inside it. Focusing the close button painted the theme focus ring
-  // on WebKit (script focus with no prior focus matches :focus-visible), so
-  // every dialog opened with a phantom accent outline on touch. The surface
-  // carries tabindex=-1, Tab still reaches the controls, and the focus-ring
-  // CSS targets button/input/textarea/select only — a surface cannot ring.
+  // Modal-open focus contract: an opened modal focuses either its surface
+  // (the common case) or its designated default control — the confirmation
+  // and unsaved-changes dialogs focus Cancel/Save so Enter resolves them.
+  // Ring visibility is not decided per dialog or by the browser's
+  // :focus-visible heuristic (script focus with no prior focus match painted
+  // phantom rings on WebKit); it is owned by the single input-modality writer
+  // below. CSS keys the ring on <html data-input-modality>, so a
+  // script-focused control rings exactly when the user is interacting by
+  // keyboard. Surfaces keep tabindex=-1 and the CSS no-ring rule for
+  // [tabindex="-1"], so they never ring.
   function focusModalSurface(viewer, requestFrame = requestAnimationFrame) {
     requestFrame(() => {
       if (!isModalTargetOpen(viewer)) return;
@@ -47,6 +51,34 @@
   function requireNode(value, name) {
     if (!value || typeof value !== "object" || !value.style) throw new TypeError(`modal dependency missing: ${name}`);
     return value;
+  }
+
+  // One explicit writer for the interaction modality that focus-ring CSS
+  // keys on. The browser decides :focus-visible for script-driven focus from
+  // an internal heuristic (prior interaction modality), which made the same
+  // dialog ring or not ring depending on how it was opened — a
+  // state-authority violation with two writers. This controller is the sole
+  // writer of <html data-input-modality>: any capture-phase keydown records
+  // "keyboard", any pointerdown records "pointer" (pointerdown covers mouse,
+  // touch, and pen), and the initial value is "pointer" so nothing rings
+  // until the keyboard is actually used. Listeners register through the
+  // composition's cleanup-tracked addAppEvent, so the beforeunload
+  // full-teardown invariant holds.
+  function createInputModalityController(options = {}) {
+    if (!options || typeof options !== "object") throw new TypeError("input modality dependency missing: options");
+    const documentTarget = options.documentTarget;
+    if (!documentTarget || typeof documentTarget !== "object") throw new TypeError("input modality dependency missing: documentTarget");
+    const rootElement = requireNode(options.rootElement, "rootElement");
+    const addAppEvent = requireFunction(options.addAppEvent, "addAppEvent");
+    let modality = "pointer";
+    function writeModality(value) {
+      modality = value;
+      rootElement.setAttribute("data-input-modality", value);
+    }
+    writeModality(modality);
+    addAppEvent(documentTarget, "keydown", () => writeModality("keyboard"), { capture: true });
+    addAppEvent(documentTarget, "pointerdown", () => writeModality("pointer"), { capture: true });
+    return Object.freeze({ modality: () => modality });
   }
 
   // Named owner for cross-dialog policy and the shared picker button DOM shape.
@@ -239,6 +271,7 @@ export {
   syncModalIsolation,
   restoreModalFocus,
   focusModalSurface,
+  createInputModalityController,
   createModalPolicyController,
   createConfirmationController,
   createModalKeyboardHandler,

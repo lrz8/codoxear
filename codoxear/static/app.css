@@ -1104,6 +1104,23 @@
         outline: 2px solid var(--focus-ring);
         outline-offset: 1px;
       }
+      /* Ring visibility for script-driven focus has one writer:
+         html[data-input-modality] is written solely by
+         createInputModalityController (app_modal.js) — "keyboard" while the
+         last interaction was a keydown, "pointer" otherwise (initial
+         "pointer"). Under keyboard modality a focused control rings on plain
+         :focus, so a dialog's script-focused default button rings exactly
+         when the dialog was opened by keyboard, never as a browser-heuristic
+         side effect. The :where() wrapper keeps this rule at base specificity
+         so the no-ring exceptions below ([tabindex="-1"] surfaces, composer
+         textarea) and per-surface ring variants keep winning. */
+      :where(html[data-input-modality="keyboard"]) button:focus,
+      :where(html[data-input-modality="keyboard"]) input:focus,
+      :where(html[data-input-modality="keyboard"]) textarea:focus,
+      :where(html[data-input-modality="keyboard"]) select:focus {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 1px;
+      }
       /* tabindex="-1" marks focus-management targets (modal surfaces focused
          on open, hover-revealed copy buttons). They are unreachable by
          keyboard by definition, so no focus indicator belongs on them — and

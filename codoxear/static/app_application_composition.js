@@ -223,6 +223,14 @@ import * as CodoxearWiring from "./app_wiring.js";
           return handler;
         }
         const eventBindings = CodoxearEventBindings.createEventBindings(wiring.createEventBindingsOptions({ addEvent: addAppEvent }));
+        // The input-modality attribute must exist (initial "pointer") before
+        // any dialog can open, and its listeners ride the same cleanup-tracked
+        // addAppEvent registrations as every other document listener.
+        const inputModalityController = CodoxearModal.createInputModalityController(wiring.createInputModalityOptions({
+          documentTarget: document,
+          rootElement: document.documentElement,
+          addAppEvent,
+        }));
         function stopMessagePolling() {
           sessionState.set("selected", null);
           asyncEpoch.incrementGeneration();

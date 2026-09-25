@@ -19,6 +19,7 @@
       createSessionTitleOptions(deps) { return select(deps, ['sessionState', 'sessionCatalog', 'titleLabel', 'sessionTitleWithId', 'openEditSession']); },
       createApplicationModalDOMOptions(deps) { return select(deps, ['root', 'el', 'iconSvg', 'windowTarget', 'codoxearVoice', 'voiceHost']); },
       createModalPolicyOptions(deps) { return select(deps, ['app', 'modalTargets', 'closeUnattended', 'isUnattendedOpen', 'closeSearch', 'isSearchOpen', 'isSidebarOpen', 'closeSidebar', 'closeFilePicker', 'closeNewSessionMenus', 'closeSessionDependencyMenu', 'el', 'iconSvg']); },
+      createInputModalityOptions(deps) { return select(deps, ['documentTarget', 'rootElement', 'addAppEvent']); },
       createConfirmationOptions(deps) { return select(deps, ['backdrop', 'viewer', 'title', 'message', 'confirmButton', 'cancelButton', 'documentTarget', 'ElementCtor', 'requestFrame', 'prepareModalOpen', 'afterModalVisibilityChanged', 'addEvent']); },
       createThemeOptions(deps) { return select(deps, ['documentTarget', 'storageGetItem', 'storageSetItem', 'storageRemoveItem', 'matchMedia', 'versionedAssetPath']); },
       createSettingsDialogOptions(deps) { return select(deps, ['root', 'el', 'iconSvg', 'themeController', 'openButton', 'voiceSection', 'activateVoiceSection', 'deactivateVoiceSection', 'documentTarget', 'ElementCtor', 'prepareModalOpen', 'afterModalVisibilityChanged', 'addEvent', 'setTimeout', 'clearTimeout', 'focusModalSurface', 'isModalTargetOpen', 'restoreModalFocus']); },
