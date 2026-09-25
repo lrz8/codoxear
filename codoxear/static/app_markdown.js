@@ -549,12 +549,138 @@ import * as CodoxearUrls from "./app_application.js";
     return out;
   }
 
+  // CommonMark delimiter flanking treats CJK brackets 「」『』《》 and fullwidth
+  // punctuation （）：，！？ as Unicode punctuation, so a bold opener like the
+  // `**` in 首推是**「欲与天公试比高」** is not left-flanking (letter before,
+  // punctuation after) and never opens; marked then pairs the wrong delimiters
+  // and bolds the text *between* the quoted phrases. The inline extension
+  // below runs ahead of marked's emStrong and rescues only the delimiter runs
+  // that are adjacent to CJK punctuation; every other span keeps the built-in
+  // CommonMark path byte-for-byte.
+  const CJK_PUNCT_RANGE = [[0x3001, 0x303f], [0xff00, 0xff65], [0x2018, 0x201d]];
+  // Flanking approximation of Unicode punctuation/symbols (marked itself uses
+  // \p{P}\p{S}); only consulted after a CJK-adjacent trigger already fired.
+  const PUNCTISH_RANGES = [[0x21, 0x2f], [0x3a, 0x40], [0x5b, 0x60], [0x7b, 0x7e], [0xa1, 0xbf], [0x2010, 0x2027], [0x2030, 0x205e]];
+
+  function codeInRanges(code, ranges) {
+    if (!Number.isFinite(code)) return false;
+    for (const [lo, hi] of ranges) if (code >= lo && code <= hi) return true;
+    return false;
+  }
+
+  function isCjkPunctCode(code) {
+    return codeInRanges(code, CJK_PUNCT_RANGE);
+  }
+
+  function isPunctishCode(code) {
+    return isCjkPunctCode(code) || codeInRanges(code, PUNCTISH_RANGES);
+  }
+
+  function isFlankWsCode(code) {
+    if (!Number.isFinite(code)) return true; // end of content flanks like whitespace
+    return code === 0x20 || (code >= 0x09 && code <= 0x0d) || code === 0xa0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a) || code === 0x2028 || code === 0x2029 || code === 0x202f || code === 0x205f || code === 0x3000;
+  }
+
+  // Mirrors marked's own blockSkip masking: code spans, inline HTML tags and
+  // [label](dest) links become filler "a"s so a rescue closer is never chosen
+  // from inside a span the built-in would keep atomic. Length-preserving, so
+  // scan indices double as indices into the real source.
+  const CJK_DELIM_SCAN_MASK_RE = /\[[^[\]]*?\]\((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*\)|`[^`]*?`|<[^<>]*?>/g;
+
+  function maskDelimScanSource(src) {
+    if (!/[`<[\]]/.test(src)) return src;
+    return src.replace(CJK_DELIM_SCAN_MASK_RE, (match) => "a".repeat(match.length));
+  }
+
+  function lastInlineSourceCharCode(tokens) {
+    if (!Array.isArray(tokens) || !tokens.length) return null;
+    const raw = tokens[tokens.length - 1] && tokens[tokens.length - 1].raw;
+    return typeof raw === "string" && raw ? raw.charCodeAt(raw.length - 1) : null;
+  }
+
+  // A `*` run may open when CommonMark allows it (not followed by whitespace,
+  // and either not followed by punctuation or preceded by whitespace/punctuation)
+  // or, the rescue case, when it is immediately followed by CJK punctuation.
+  function rescueRunCanOpen(beforeCode, afterCode) {
+    if (isCjkPunctCode(afterCode)) return true;
+    if (isFlankWsCode(afterCode)) return false;
+    if (!isPunctishCode(afterCode)) return true;
+    return beforeCode === null || isFlankWsCode(beforeCode) || isPunctishCode(beforeCode);
+  }
+
+  // A `*` run may close when CommonMark allows it (not preceded by whitespace,
+  // and either not preceded by punctuation or followed by whitespace/punctuation)
+  // or, the rescue case, when it is immediately preceded by CJK punctuation.
+  function rescueRunCanClose(prevCode, nextCode) {
+    if (isCjkPunctCode(prevCode)) return true;
+    if (isFlankWsCode(prevCode)) return false;
+    if (!isPunctishCode(prevCode)) return true;
+    return isFlankWsCode(nextCode) || isPunctishCode(nextCode);
+  }
+
+  function tokenizeCjkEmphasis(src, tokens) {
+    if (src.charCodeAt(0) !== 0x2a) return undefined;
+    let runEnd = 1;
+    while (src.charCodeAt(runEnd) === 0x2a) runEnd += 1;
+    const runLen = runEnd;
+    if (runLen > 3) return undefined;
+    const beforeCode = lastInlineSourceCharCode(tokens);
+    const afterCode = src.charCodeAt(runEnd);
+    // Fire only for delimiter runs adjacent to CJK punctuation; everything
+    // else must keep the built-in CommonMark result.
+    if (!isCjkPunctCode(beforeCode) && !isCjkPunctCode(afterCode)) return undefined;
+    if (!rescueRunCanOpen(beforeCode, afterCode)) return undefined;
+    const masked = maskDelimScanSource(src);
+    for (let i = runLen; i < masked.length;) {
+      if (masked.charCodeAt(i) !== 0x2a) {
+        i += 1;
+        continue;
+      }
+      let end = i;
+      while (masked.charCodeAt(end) === 0x2a) end += 1;
+      if (i > runLen && end - i >= runLen && rescueRunCanClose(src.charCodeAt(i - 1), src.charCodeAt(end))) {
+        const raw = src.slice(0, i + runLen);
+        // ***both*** nests as em > strong in marked; re-lexing raw minus one
+        // delimiter on each side reproduces exactly that structure (and lets
+        // the inner strong itself go through this rescue when CJK-adjacent).
+        const inner = runLen === 3 ? raw.slice(1, -1) : src.slice(runLen, i);
+        return { type: "cjkEmphasis", raw, level: runLen, tokens: this.lexer.inlineTokens(inner) };
+      }
+      i = end;
+    }
+    return undefined;
+  }
+
+  let cjkEmphasisRegistered = false;
+  function ensureCjkEmphasisExtension() {
+    if (cjkEmphasisRegistered) return;
+    if (!window.marked || typeof window.marked.use !== "function") return;
+    window.marked.use({
+      extensions: [
+        {
+          name: "cjkEmphasis",
+          level: "inline",
+          tokenizer: tokenizeCjkEmphasis,
+          renderer(token) {
+            const inner = this.parser.parseInline(token.tokens);
+            // level 3 re-lexed raw minus one delimiter per side, so the inner
+            // strong token already exists — mirroring marked's em renderer.
+            return token.level === 2 ? `<strong>${inner}</strong>` : `<em>${inner}</em>`;
+          },
+        },
+      ],
+    });
+    cjkEmphasisRegistered = true;
+  }
+
   function mdToHtml(src, options = null) {
     if (!window.marked || typeof window.marked.parse !== "function") throw new Error("marked failed to load");
+    ensureCjkEmphasisExtension();
     const mathStore = [];
     const prepared = extractMathFromText(rewriteOaiMemCitations(String(src ?? "").replaceAll("\r\n", "\n")), mathStore);
     // breaks: true preserves single newlines from the raw text as line
     // breaks — agent messages are plain-text-first, not print-style prose.
+    // The CJK emphasis rescue is registered lazily and idempotently above.
     return substituteMath(postProcessMarkedHtml(window.marked.parse(prepared, { breaks: true }), options), mathStore);
   }
 
