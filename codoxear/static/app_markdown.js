@@ -550,16 +550,32 @@ import * as CodoxearUrls from "./app_application.js";
   }
 
   // CommonMark delimiter flanking treats CJK brackets 「」『』《》 and fullwidth
-  // punctuation （）：，！？ as Unicode punctuation, so a bold opener like the
-  // `**` in 首推是**「欲与天公试比高」** is not left-flanking (letter before,
-  // punctuation after) and never opens; marked then pairs the wrong delimiters
-  // and bolds the text *between* the quoted phrases. The inline extension
-  // below runs ahead of marked's emStrong and rescues only the delimiter runs
-  // that are adjacent to CJK punctuation; every other span keeps the built-in
-  // CommonMark path byte-for-byte.
+  // punctuation （）：，！？。 as Unicode punctuation, and its flanking rules
+  // encode a whitespace-delimited-language assumption: an opener followed by
+  // punctuation may only open when preceded by whitespace/punctuation, and a
+  // closer preceded by punctuation may only close when followed by
+  // whitespace/punctuation. CJK prose has no inter-word spaces, so both
+  // 首推是**「标题」** (opener rejected) and **结论。**后续 (closer rejected)
+  // are ordinary text, not edge cases; marked then leaves the `**` literal or
+  // pairs the opener with a far-away delimiter, bolding the prose between two
+  // intended spans.
+  //
+  // The inline extension below runs ahead of marked's emStrong and resolves
+  // these spans by matching, the same way CommonMark's delimiter stack does:
+  // a run's role comes from pairing, not from guessing at its local context.
+  // It fires at an open-capable run, scans forward for the NEAREST closer
+  // under CJK-relaxed flanking, and claims the span only when CommonMark
+  // would resolve it differently — the opener or that nearest closer needed
+  // the relaxed rule. When neither does, the built-in pairs the very same
+  // delimiters (relaxed capability is a superset of CommonMark's, so the
+  // nearest relaxed closer is also the nearest CommonMark closer whenever
+  // that run is CommonMark-valid) and the extension defers, keeping every
+  // non-CJK span on the built-in path byte-for-byte.
   const CJK_PUNCT_RANGE = [[0x3001, 0x303f], [0xff00, 0xff65], [0x2018, 0x201d]];
   // Flanking approximation of Unicode punctuation/symbols (marked itself uses
-  // \p{P}\p{S}); only consulted after a CJK-adjacent trigger already fired.
+  // \p{P}\p{S}). Where the approximation disagrees with marked, the extension
+  // may claim a span the built-in would have rendered — but it pairs the same
+  // nearest delimiters, so the output is unchanged.
   const PUNCTISH_RANGES = [[0x21, 0x2f], [0x3a, 0x40], [0x5b, 0x60], [0x7b, 0x7e], [0xa1, 0xbf], [0x2010, 0x2027], [0x2030, 0x205e]];
 
   function codeInRanges(code, ranges) {
@@ -598,24 +614,30 @@ import * as CodoxearUrls from "./app_application.js";
     return typeof raw === "string" && raw ? raw.charCodeAt(raw.length - 1) : null;
   }
 
-  // A `*` run may open when CommonMark allows it (not followed by whitespace,
-  // and either not followed by punctuation or preceded by whitespace/punctuation)
-  // or, the rescue case, when it is immediately followed by CJK punctuation.
-  function rescueRunCanOpen(beforeCode, afterCode) {
-    if (isCjkPunctCode(afterCode)) return true;
+  // CommonMark left-flanking for `*`: not followed by whitespace, and either
+  // not followed by punctuation or preceded by whitespace/punctuation.
+  function commonmarkRunCanOpen(beforeCode, afterCode) {
     if (isFlankWsCode(afterCode)) return false;
     if (!isPunctishCode(afterCode)) return true;
     return beforeCode === null || isFlankWsCode(beforeCode) || isPunctishCode(beforeCode);
   }
 
-  // A `*` run may close when CommonMark allows it (not preceded by whitespace,
-  // and either not preceded by punctuation or followed by whitespace/punctuation)
-  // or, the rescue case, when it is immediately preceded by CJK punctuation.
-  function rescueRunCanClose(prevCode, nextCode) {
-    if (isCjkPunctCode(prevCode)) return true;
+  // CommonMark right-flanking for `*`: not preceded by whitespace, and either
+  // not preceded by punctuation or followed by whitespace/punctuation.
+  function commonmarkRunCanClose(prevCode, nextCode) {
     if (isFlankWsCode(prevCode)) return false;
     if (!isPunctishCode(prevCode)) return true;
     return isFlankWsCode(nextCode) || isPunctishCode(nextCode);
+  }
+
+  // CJK-relaxed flanking: additionally, a run may open when immediately
+  // followed by CJK punctuation and may close when immediately preceded by it.
+  function rescueRunCanOpen(beforeCode, afterCode) {
+    return isCjkPunctCode(afterCode) || commonmarkRunCanOpen(beforeCode, afterCode);
+  }
+
+  function rescueRunCanClose(prevCode, nextCode) {
+    return isCjkPunctCode(prevCode) || commonmarkRunCanClose(prevCode, nextCode);
   }
 
   function tokenizeCjkEmphasis(src, tokens) {
@@ -626,10 +648,12 @@ import * as CodoxearUrls from "./app_application.js";
     if (runLen > 3) return undefined;
     const beforeCode = lastInlineSourceCharCode(tokens);
     const afterCode = src.charCodeAt(runEnd);
-    // Fire only for delimiter runs adjacent to CJK punctuation; everything
-    // else must keep the built-in CommonMark result.
-    if (!isCjkPunctCode(beforeCode) && !isCjkPunctCode(afterCode)) return undefined;
     if (!rescueRunCanOpen(beforeCode, afterCode)) return undefined;
+    // Claim the span only when CommonMark would resolve it differently: the
+    // opener needed the relaxed rule, or the nearest acceptable closer did.
+    // Otherwise defer so the built-in emStrong produces its byte-for-byte
+    // result for the identical span.
+    const openerNeedsRescue = !commonmarkRunCanOpen(beforeCode, afterCode);
     const masked = maskDelimScanSource(src);
     for (let i = runLen; i < masked.length;) {
       if (masked.charCodeAt(i) !== 0x2a) {
@@ -639,6 +663,7 @@ import * as CodoxearUrls from "./app_application.js";
       let end = i;
       while (masked.charCodeAt(end) === 0x2a) end += 1;
       if (i > runLen && end - i >= runLen && rescueRunCanClose(src.charCodeAt(i - 1), src.charCodeAt(end))) {
+        if (!openerNeedsRescue && commonmarkRunCanClose(src.charCodeAt(i - 1), src.charCodeAt(end))) return undefined;
         const raw = src.slice(0, i + runLen);
         // ***both*** nests as em > strong in marked; re-lexing raw minus one
         // delimiter on each side reproduces exactly that structure (and lets

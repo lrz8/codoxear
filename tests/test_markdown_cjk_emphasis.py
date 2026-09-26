@@ -78,6 +78,51 @@ def test_mirror_case_closer_before_letter_bold_only_the_phrase() -> None:
     assert html == "<p><strong>「敢教日月换新天」</strong>很霸气</p>"
 
 
+def test_cjk_period_closer_followed_by_letter_bolds_the_span() -> None:
+    # The `**` between 。 and the next CJK letter is not right-flanking under
+    # CommonMark (punctuation before, letter after), so the built-in can never
+    # close this span; the rescue must pair it with the pending opener.
+    html = render_line("**bold。**tail")
+
+    assert html == "<p><strong>bold。</strong>tail</p>"
+
+
+def test_reported_commander_sentence_bolds_only_the_verdict() -> None:
+    markdown = "**成为合格的中场指挥官：概率很高。**他的底层数据（机会创造、推进、xG积累）在最差的时期都是队内顶级，这是能力信号；波动的是终结和默契，这是时间信号。能力为真、时间可解的问题，历史极少以失败告终。"
+
+    html = render_line(markdown)
+
+    assert html == (
+        "<p><strong>成为合格的中场指挥官：概率很高。</strong>他的底层数据（机会创造、推进、xG积累）"
+        "在最差的时期都是队内顶级，这是能力信号；波动的是终结和默契，这是时间信号。"
+        "能力为真、时间可解的问题，历史极少以失败告终。</p>"
+    )
+
+
+def test_rejected_cjk_closer_cannot_open_and_swallow_the_next_span() -> None:
+    # Regression: the stranded closer in `。**t` was reinterpreted as an
+    # opener and paired with the next span's opener, bolding the prose between
+    # the two intended spans and destroying the second one.
+    html = render_line("**bold。**tail and **second** end")
+
+    assert html == "<p><strong>bold。</strong>tail and <strong>second</strong> end</p>"
+
+
+def test_unclosed_cjk_opener_stays_literal() -> None:
+    html = render_line("**永远没有闭合的粗体。后续没有分隔符")
+
+    assert html == "<p>**永远没有闭合的粗体。后续没有分隔符</p>"
+
+
+def test_opener_after_cjk_period_keeps_builtin_path() -> None:
+    # `。**n` followed by a letter is a valid CommonMark opener (letter after
+    # the run), and its letter-adjacent closer is valid too — nothing needs
+    # the rescue, so the built-in result must pass through unchanged.
+    html = render_line("句子。**新粗体**后续")
+
+    assert html == "<p>句子。<strong>新粗体</strong>后续</p>"
+
+
 def test_single_star_cjk_emphasis_rescued() -> None:
     html = render_line("*「斜体」*测试")
 
