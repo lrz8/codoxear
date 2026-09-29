@@ -17,6 +17,7 @@ import * as CodoxearSendLifecycle from "./app_send_lifecycle.js";
 import * as CodoxearSessionLifecycle from "./app_session_lifecycle.js";
 import * as CodoxearSessionCatalog from "./app_session_catalog.js";
 import * as CodoxearSessionRefresh from "./app_session_refresh.js";
+import * as CodoxearSessionSnapshot from "./app_session_snapshot.js";
 import * as CodoxearSessionState from "./app_session_state.js";
 import * as CodoxearSessionTitle from "./app_session_title.js";
 import * as CodoxearTranscriptRender from "./app_transcript_render.js";
@@ -256,6 +257,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           if (sessionTitleController) sessionTitleController.dispose();
           if (chatInteractionController) chatInteractionController.dispose();
           if (topbarController) topbarController.dispose();
+          if (sessionSnapshotController) sessionSnapshotController.dispose();
           if (queueController) queueController.dispose();
           if (diagController) diagController.dispose();
           if (chatNavigationController) chatNavigationController.dispose();
@@ -512,6 +514,22 @@ import * as CodoxearWiring from "./app_wiring.js";
           topMeta,
           topActions,
           eventBindings,
+        }));
+
+        // The restore row is created before the chat-interaction controller so
+        // it is already in the DOM when hint mode snapshots shell controls.
+        const sessionSnapshotController = CodoxearSessionSnapshot.createSessionSnapshotController(wiring.createSessionSnapshotOptions({
+          el,
+          iconSvg,
+          api,
+          setToast,
+          handleAppAuthLoss,
+          refreshSessions: () => sessionRefreshController.refreshSessions(),
+          isAppDisposed: () => appDisposed,
+          sessionCatalog,
+          sessionsWrap,
+          eventBindings,
+          consoleError: (...args) => console.error(...args),
         }));
 
         async function copyToClipboard(text) {
