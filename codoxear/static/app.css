@@ -1807,7 +1807,8 @@
         width: auto;
         max-width: 100%;
         table-layout: auto;
-        border-collapse: collapse;
+        border-collapse: separate;
+        border-spacing: 0;
         font-size: var(--font-md);
         line-height: 1.35;
         border: 1px solid var(--border);
