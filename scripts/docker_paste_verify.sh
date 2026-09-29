@@ -212,9 +212,12 @@ import sys
 
 def load(path):
     raw = json.load(open(path, encoding="utf-8"))
-    # agent-browser --json wraps the eval result; accept both shapes.
-    if isinstance(raw, dict) and "data" in raw:
-        return raw["data"]
+    # agent-browser --json wraps as {success, data: {origin, result}, error}.
+    if isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+        inner = raw["data"]
+        if "result" in inner:
+            return inner["result"]
+        return inner
     return raw
 
 pending = load(sys.argv[1])
