@@ -264,6 +264,7 @@ class WebLaunchFactoryDeps:
     record_launch_attempt: Any
     repo_root: Any
     resolve_dir_target: Any
+    resume_candidate_from_log: Any
     run: Any
     stderr: Any
     tmux_pane_snapshot: Any
@@ -479,6 +480,7 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
             record_launch_attempt=server._record_launch_attempt,
             repo_root=server.Path(__file__).resolve().parent.parent,
             resolve_dir_target=server._resolve_dir_target,
+            resume_candidate_from_log=server._resume_candidate_from_log,
             run=server.subprocess.run,
             stderr=server.sys.stderr,
             tmux_pane_snapshot=server._tmux_pane_snapshot,
@@ -927,6 +929,7 @@ def web_launch_coordinator_for_manager(manager: Any, deps: WebLaunchFactoryDeps)
         create_git_worktree=deps.create_git_worktree,
         codex_trust_override_for_path=deps.codex_trust_override_for_path,
         list_resume_candidates_for_cwd=deps.list_resume_candidates_for_cwd,
+        resume_candidate_from_log=deps.resume_candidate_from_log,
         live_session_for_resume_target=manager._live_session_for_resume_target,
         load_env_file=deps.load_env_file,
         environ=deps.environ,

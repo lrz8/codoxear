@@ -165,6 +165,7 @@ def _web_launch_coordinator(**overrides) -> SessionWebLaunchCoordinator:
             iter_session_logs=server._iter_session_logs,
             resume_candidate_from_log_func=_resume_candidate,
         ),
+        resume_candidate_from_log=_resume_candidate,
         live_session_for_resume_target=lambda _resume_id, _row: None,
         load_env_file=_load_env_file_impl,
         environ=dict(os.environ),

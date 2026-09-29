@@ -1328,6 +1328,7 @@ class SessionManager:
         reasoning_effort: str | None = None,
         service_tier: str | None = None,
         create_in_tmux: bool = False,
+        resume_row: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._web_launch_coordinator_for_manager().spawn_web_session(
             cwd=cwd,
@@ -1341,6 +1342,7 @@ class SessionManager:
             reasoning_effort=reasoning_effort,
             service_tier=service_tier,
             create_in_tmux=create_in_tmux,
+            resume_row=resume_row,
         )
 
     def send(self, session_id: str, text: str, *, allow_pending_attachment: bool = False, queue_item_id: str | None = None) -> dict[str, Any]:

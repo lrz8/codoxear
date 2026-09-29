@@ -21,6 +21,7 @@ class SessionWebLaunchCoordinator:
     create_git_worktree: Callable[[Path, str], Path]
     codex_trust_override_for_path: Callable[[Path], str]
     list_resume_candidates_for_cwd: Callable[[Path], list[dict[str, Any]]]
+    resume_candidate_from_log: Callable[..., dict[str, Any] | None]
     live_session_for_resume_target: Callable[[str, dict[str, Any] | None], Session | None]
     load_env_file: Callable[[Path], dict[str, str]]
     environ: MutableMapping[str, str]
@@ -55,6 +56,7 @@ class SessionWebLaunchCoordinator:
         reasoning_effort: str | None = None,
         service_tier: str | None = None,
         create_in_tmux: bool = False,
+        resume_row: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         launch_plan = prepare_launch_plan(
             LaunchPlanRequest(
@@ -69,12 +71,14 @@ class SessionWebLaunchCoordinator:
                 reasoning_effort=reasoning_effort,
                 service_tier=service_tier,
                 create_in_tmux=create_in_tmux,
+                resume_row=resume_row,
             ),
             deps=LaunchPlanDeps(
                 resolve_dir_target=self.resolve_dir_target,
                 create_git_worktree=self.create_git_worktree,
                 codex_trust_override_for_path=self.codex_trust_override_for_path,
                 list_resume_candidates_for_cwd=self.list_resume_candidates_for_cwd,
+                resume_candidate_from_log=self.resume_candidate_from_log,
                 live_session_for_resume_target=self.live_session_for_resume_target,
                 load_env_file=self.load_env_file,
                 environ=self.environ,

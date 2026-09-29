@@ -23,6 +23,11 @@ class LaunchPlanRequest:
     reasoning_effort: str | None = None
     service_tier: str | None = None
     create_in_tmux: bool = False
+    # Trusted resume target carrying the transcript's ``log_path`` (a snapshot
+    # restore). It bypasses the cwd-keyed candidate scan; the row is still
+    # re-derived from the log so its session id, cwd, and subagent exclusions
+    # come from the transcript itself rather than from the caller.
+    resume_row: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,7 @@ class LaunchPlanDeps:
     create_git_worktree: Callable[[Path, str], Path]
     codex_trust_override_for_path: Callable[[Path], str]
     list_resume_candidates_for_cwd: Callable[..., list[dict[str, Any]]]
+    resume_candidate_from_log: Callable[..., dict[str, Any] | None]
     live_session_for_resume_target: Callable[[str, dict[str, Any]], Any | None]
     load_env_file: Callable[[Path], Mapping[str, str]]
     environ: Mapping[str, str]
@@ -54,6 +60,31 @@ class LaunchPlan:
     reasoning_effort: str | None = None
     service_tier: str | None = None
     create_in_tmux: bool = False
+
+
+def _validated_trusted_resume_row(
+    trusted_row: dict[str, Any],
+    *,
+    resume_id: str,
+    backend_name: str,
+    resume_candidate_from_log: Callable[..., dict[str, Any] | None],
+) -> dict[str, Any]:
+    log_path_raw = trusted_row.get("log_path")
+    if not isinstance(log_path_raw, str) or not log_path_raw.strip():
+        raise ValueError("resume_row requires log_path")
+    log_path = Path(log_path_raw.strip()).expanduser()
+    if not log_path.is_file():
+        raise ValueError(f"resume session log missing: {log_path}")
+    try:
+        row = resume_candidate_from_log(log_path, agent_backend=backend_name)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"resume session log is invalid: {log_path}: {e}") from e
+    if row is None:
+        raise ValueError(f"resume session log is not a resumable main-thread transcript: {log_path}")
+    row_id = row.get("session_id")
+    if row_id != resume_id:
+        raise ValueError(f"resume session log {log_path} belongs to session {row_id}, not {resume_id}")
+    return row
 
 
 def prepare_launch_plan(request: LaunchPlanRequest, *, deps: LaunchPlanDeps) -> LaunchPlan:
@@ -90,10 +121,18 @@ def prepare_launch_plan(request: LaunchPlanRequest, *, deps: LaunchPlanDeps) -> 
         if not resume_id:
             raise ValueError("resume_session_id must be a non-empty string")
         resume_row: dict[str, Any] | None = None
-        for row in deps.list_resume_candidates_for_cwd(requested_cwd, agent_backend=backend_name, limit=1000):
-            if row.get("session_id") == resume_id:
-                resume_row = row
-                break
+        if request.resume_row is not None:
+            resume_row = _validated_trusted_resume_row(
+                request.resume_row,
+                resume_id=resume_id,
+                backend_name=backend_name,
+                resume_candidate_from_log=deps.resume_candidate_from_log,
+            )
+        else:
+            for row in deps.list_resume_candidates_for_cwd(requested_cwd, agent_backend=backend_name, limit=1000):
+                if row.get("session_id") == resume_id:
+                    resume_row = row
+                    break
         if resume_row is None:
             raise ValueError(f"resume session not found for cwd: {resume_id}")
         live_target = deps.live_session_for_resume_target(resume_id, resume_row)
