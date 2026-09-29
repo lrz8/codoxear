@@ -698,14 +698,46 @@ import * as CodoxearUrls from "./app_application.js";
     cjkEmphasisRegistered = true;
   }
 
+  // marked v15's del rule accepts a run of one OR two tildes per side
+  // (`~~?...~~?` with a backreference), so a sentence like
+  // `100~300°/s ... **~50 像素**` pairs two unrelated approximation/range
+  // tildes into one strikethrough span — deleting the prose between them and
+  // swallowing the `**`. Agent output is dense with `100~300` ranges and
+  // `~50` approximations, so this false-positive class is frequent. GFM
+  // defines strikethrough as exactly `~~`; a single `~` is never markup.
+  // This override runs ahead of the builtin (marked.use tokenizer wrapping)
+  // and reproduces the builtin rule with the run pinned to exactly two
+  // tildes; anything else returns undefined — never `false` — so the
+  // single-tilde builtin never gets a fallback chance and the tildes render
+  // as literal text.
+  const DOUBLE_TILDE_DEL_RE = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+  let gfmStrikethroughRegistered = false;
+  function ensureGfmStrikethrough() {
+    if (gfmStrikethroughRegistered) return;
+    if (!window.marked || typeof window.marked.use !== "function") return;
+    window.marked.use({
+      tokenizer: {
+        del(src) {
+          const match = DOUBLE_TILDE_DEL_RE.exec(src);
+          if (!match) return undefined;
+          return { type: "del", raw: match[0], text: match[2], tokens: this.lexer.inlineTokens(match[2]) };
+        },
+      },
+    });
+    gfmStrikethroughRegistered = true;
+  }
+
   function mdToHtml(src, options = null) {
     if (!window.marked || typeof window.marked.parse !== "function") throw new Error("marked failed to load");
     ensureCjkEmphasisExtension();
+    ensureGfmStrikethrough();
     const mathStore = [];
     const prepared = extractMathFromText(rewriteOaiMemCitations(String(src ?? "").replaceAll("\r\n", "\n")), mathStore);
     // breaks: true preserves single newlines from the raw text as line
     // breaks — agent messages are plain-text-first, not print-style prose.
-    // The CJK emphasis rescue is registered lazily and idempotently above.
+    // The CJK emphasis rescue and the GFM-strict strikethrough override are
+    // registered lazily and idempotently above.
     return substituteMath(postProcessMarkedHtml(window.marked.parse(prepared, { breaks: true }), options), mathStore);
   }
 
