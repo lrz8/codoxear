@@ -199,7 +199,7 @@ import * as CodoxearUrls from "./app_application.js";
     const walker = doc.createTreeWalker(root, 4);
     const textNodes = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!nodeHasAncestor(node, "A") && !nodeHasAncestor(node, "CODE") && !nodeHasAncestor(node, "SCRIPT") && !nodeHasAncestor(node, "STYLE")) textNodes.push(node);
+      if (!nodeHasAncestor(node, "A") && !nodeHasAncestor(node, "CODE") && !nodeHasAncestor(node, "SCRIPT") && !nodeHasAncestor(node, "STYLE") && !nodeHasAncestor(node, "VIDEO")) textNodes.push(node);
     }
     for (const textNode of textNodes) {
       const raw = textNode.nodeValue || "";
@@ -414,6 +414,80 @@ import * as CodoxearUrls from "./app_application.js";
     scheduleMarkedImageHydration();
   }
 
+  // Browser-decodable video containers, mirroring the file viewer's
+  // BROWSER_SAFE_VIDEO_TYPES (mp4/webm/ogg). Anything else (mkv, avi, mov,
+  // ...) resolves to null so the player collapses to a file link whose
+  // viewer offers the transcoded compatible preview instead of a dead
+  // inline player.
+  const INLINE_VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv", "ogg"]);
+
+  function previewVideoUrlForRef(rawRef, localRef, { sessionId } = {}) {
+    if (localRef && localRef.path) {
+      if (!INLINE_VIDEO_EXTENSIONS.has(filePathExtension(localRef.path))) return null;
+      if (sessionId) return resolveAppUrl(`/api/sessions/${sessionId}/file/blob?path=${encodeURIComponent(localRef.path)}`);
+      if (localRef.path.startsWith("/")) return resolveAppUrl(`/api/files/blob?path=${encodeURIComponent(localRef.path)}`);
+      return null;
+    }
+    return safeUrl(rawRef);
+  }
+
+  function resolveVideoSourceUrl(rawSrc, localRef, options) {
+    if (options && typeof options.resolveVideoSrc === "function") return options.resolveVideoSrc(rawSrc, localRef);
+    return localRef ? null : safeUrl(rawSrc);
+  }
+
+  // marked passes raw <video> HTML through verbatim; without this pass the
+  // browser resolves a local-path src against the app origin, the fetch 404s,
+  // and the player shows the browser's "no supported format/MIME" fallback.
+  // Images already route through resolveImageSrc; this gives video the same
+  // treatment (blob URL for server-readable files, safeUrl for remote).
+  function rewriteMarkedVideos(root, doc, options) {
+    for (const video of root.querySelectorAll("video")) {
+      let firstRaw = "";
+      const trackRaw = (raw) => {
+        if (!firstRaw && raw) firstRaw = raw;
+        return localFileRefFromRef(raw, options);
+      };
+      const ownSrc = String(video.getAttribute("src") || "").trim();
+      const ownUrl = ownSrc ? resolveVideoSourceUrl(ownSrc, trackRaw(ownSrc), options) || "" : "";
+      if (ownUrl) {
+        // A video element's own src wins over <source> children.
+        for (const source of video.querySelectorAll("source")) source.remove();
+        video.setAttribute("src", ownUrl);
+      } else {
+        video.removeAttribute("src");
+        let kept = 0;
+        for (const source of video.querySelectorAll("source")) {
+          const raw = String(source.getAttribute("src") || "").trim();
+          const url = raw ? resolveVideoSourceUrl(raw, trackRaw(raw), options) || "" : "";
+          if (url) {
+            source.setAttribute("src", url);
+            kept += 1;
+          } else source.remove();
+        }
+        if (!kept) {
+          // No playable source survives resolution. Drop the dead player and
+          // leave the first candidate as text; the file-ref text pass below
+          // turns a local path into a clickable viewer link.
+          video.replaceWith(doc.createTextNode(firstRaw || String(video.textContent || "")));
+          continue;
+        }
+      }
+      if (!video.hasAttribute("controls")) video.setAttribute("controls", "");
+      if (!video.hasAttribute("preload")) video.setAttribute("preload", "metadata");
+      video.setAttribute("playsinline", "");
+      const poster = String(video.getAttribute("poster") || "").trim();
+      if (poster) {
+        const posterRef = localFileRefFromRef(poster, options);
+        const posterUrl = options && typeof options.resolveImageSrc === "function"
+          ? options.resolveImageSrc(poster, posterRef)
+          : posterRef ? null : safeUrl(poster);
+        if (posterUrl) video.setAttribute("poster", posterUrl);
+        else video.removeAttribute("poster");
+      }
+    }
+  }
+
   function decorateCodeBlocks(root, doc) {
     for (const pre of root.querySelectorAll("pre")) {
       const code = pre.querySelector(":scope > code");
@@ -464,6 +538,7 @@ import * as CodoxearUrls from "./app_application.js";
     const root = template.content;
     rewriteMarkedLinks(root, document, options);
     rewriteMarkedImages(root, document, options);
+    rewriteMarkedVideos(root, document, options);
     rewriteInlineCodeFileRefs(root, document, options);
     rewriteTextFileRefs(root, document, options);
     decorateCodeBlocks(root, document);
@@ -790,6 +865,9 @@ import * as CodoxearUrls from "./app_application.js";
       resolveImageDimensionsUrl(rawRef, localRef) {
         return previewImageDimensionsUrlForRef(rawRef, localRef, { filePath: basePath, sessionId: sid });
       },
+      resolveVideoSrc(rawRef, localRef) {
+        return previewVideoUrlForRef(rawRef, localRef, { sessionId: sid });
+      },
     });
   }
 
@@ -832,7 +910,10 @@ import * as CodoxearUrls from "./app_application.js";
       resolveImageDimensionsUrl(rawRef, localRef) {
         return previewImageDimensionsUrlForRef(rawRef, localRef, { sessionId: sid });
       },
+      resolveVideoSrc(rawRef, localRef) {
+        return previewVideoUrlForRef(rawRef, localRef, { sessionId: sid });
+      },
     });
   }
 
-export { escapeHtml, mdToHtml, mdToHtmlCached, normalizeLineNumber, parseLocalFileRef, isMarkdownPreviewable, markdownPreviewHtml, chatMarkdownHtmlCached, attachmentDisplayMarkdown, prepareImageForDisplay, rememberImageDimensions, hydrateMarkedImages };
+export { escapeHtml, mdToHtml, mdToHtmlCached, normalizeLineNumber, parseLocalFileRef, isMarkdownPreviewable, markdownPreviewHtml, chatMarkdownHtmlCached, attachmentDisplayMarkdown, prepareImageForDisplay, rememberImageDimensions, hydrateMarkedImages, rewriteMarkedVideos, previewVideoUrlForRef };

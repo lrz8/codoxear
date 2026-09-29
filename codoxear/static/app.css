@@ -1848,6 +1848,15 @@
         border: 1px solid var(--border-subtle);
         background: var(--paper);
       }
+      .md video {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        margin: var(--space-4) auto var(--space-5) auto;
+        border-radius: var(--radius-card);
+        border: 1px solid var(--border-subtle);
+        background: var(--video-bg);
+      }
 
       /* Math (KaTeX) rendering */
       .md .katex {
