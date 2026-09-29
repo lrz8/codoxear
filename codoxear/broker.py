@@ -257,6 +257,26 @@ def _write_all(fd: int, data: bytes) -> None:
     _pty_util.write_all(fd, data)
 
 
+def _unlink_clean_exit_evidence(sock_path: Path | None, exit_code: int) -> bool:
+    """Unlink the control socket and sidecar only after a clean (status 0) agent exit.
+
+    The server's session snapshot reads a vanished socket as the clean-exit
+    signal and drops the entry. A nonzero exit (crash, OOM kill, V8 abort,
+    signal death) must leave both files so the stale-sidecar path produces a
+    lost tombstone and the entry survives for restore.
+    """
+    if sock_path is None or exit_code != 0:
+        return False
+    for path in (sock_path, sock_path.with_suffix(".json")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            traceback.print_exc()
+    return True
+
+
 def _inject(fd: int, *, text: str, suffix: bytes, delay_s: float = 0.05) -> None:
     _pty_util.inject_bracketed_paste(fd, text=text, suffix=suffix, delay_s=delay_s)
 
@@ -963,8 +983,18 @@ class Broker:
 
         State touched:
             Updates ``self.state``, ``self._stop``, and ``self._stdin_termios``;
-            writes broker metadata and launch-ledger records; and creates then
-            removes the control socket and its metadata sidecar.
+            writes broker metadata and launch-ledger records; and creates the
+            control socket and its metadata sidecar.
+
+        Teardown contract (the server's session snapshot depends on it): the
+        socket and sidecar are unlinked **only when the agent exited with
+        status 0**. A nonzero status (crash, OOM kill, V8 abort, signal death)
+        leaves both files so the server's stale-sidecar path produces a lost
+        tombstone and the session's snapshot entry survives for restore. A
+        SIGHUP (closed terminal tab / tmux window) has no handler, so the
+        broker dies without reaching this teardown and likewise leaves the
+        files — the same, safe direction. Only a zero exit erases its own
+        evidence, which is what distinguishes a deliberate close from death.
         """
         rows, cols = _term_size()
         _require_proc()
@@ -1230,15 +1260,8 @@ class Broker:
                         pty_tail=st2.output_tail[-4000:],
                     )
                 )
-        if st2 and st2.sock_path:
-            try:
-                st2.sock_path.unlink()
-            except Exception:
-                traceback.print_exc()
-            try:
-                st2.sock_path.with_suffix(".json").unlink()
-            except Exception:
-                traceback.print_exc()
+        if st2:
+            _unlink_clean_exit_evidence(st2.sock_path, exit_code)
         self._stop_codex_app_server()
         return exit_code
 
