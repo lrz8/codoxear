@@ -524,6 +524,17 @@ def test_restore_summary_text_per_outcome_mix() -> None:
             {{ session_id: "c", outcome: "failed", error: "  log missing " }},
           ], restored: 2, skipped: 1, failed: 1 }}),
           summary({{ results: [{{ session_id: "c", outcome: "failed" }}], restored: 0, skipped: 0, failed: 1 }}),
+          summary({{ results: [
+            {{ session_id: "a", outcome: "launched" }},
+            {{ session_id: "b", outcome: "skipped_live" }},
+            {{ session_id: "c", outcome: "failed", error: "tmux unavailable" }},
+            {{ session_id: "d", outcome: "failed", error: "session log missing: /x" }},
+          ], restored: 2, skipped: 1, failed: 2 }}),
+          summary({{ results: [
+            {{ session_id: "a", outcome: "failed", error: "tmux unavailable" }},
+            {{ session_id: "b", outcome: "failed", error: "" }},
+            {{ session_id: "c", outcome: "failed", error: "cwd missing: /y" }},
+          ], restored: 0, skipped: 0, failed: 3 }}),
           summary({{}}),
         ]));
         """
@@ -533,9 +544,11 @@ def test_restore_summary_text_per_outcome_mix() -> None:
         "Restored 1 session",
         "Restored 0 sessions",
         "Restored 2 · skipped 1 (running)",
-        "Restored 1 · failed 2: tmux unavailable",
+        "Restored 1 · failed 2: tmux unavailable ; log missing",
         "Restored 2 · skipped 1 (running) · failed 1: log missing",
         "Restored 0 · failed 1",
+        "Restored 2 · skipped 1 (running) · failed 2: tmux unavailable ; session log missing: /x",
+        "Restored 0 · failed 3: tmux unavailable ; cwd missing: /y",
         "Restored 0 sessions",
     ]
 

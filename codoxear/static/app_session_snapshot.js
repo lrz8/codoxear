@@ -64,7 +64,8 @@ function counted(response, field) {
 }
 
 // One toast line per restore: "Restored 3 sessions", "Restored 2 · skipped 1
-// (running)", with failures appended as " · failed 1: <first reason>".
+// (running)", with failures appended as " · failed 2: <reason> ; <reason>" —
+// every failed entry's reason, in result order, joined with " ; ".
 function restoreSummaryText(response) {
   const results = Array.isArray(response && response.results) ? response.results : [];
   const restored = counted(response, "restored");
@@ -74,9 +75,11 @@ function restoreSummaryText(response) {
   const parts = [`Restored ${restored}`];
   if (skipped) parts.push(`skipped ${skipped} (running)`);
   if (failed) {
-    const firstFailure = results.find((result) => result && result.outcome === "failed" && result.error);
-    const reason = firstFailure ? String(firstFailure.error).trim() : "";
-    parts.push(reason ? `failed ${failed}: ${reason}` : `failed ${failed}`);
+    const reasons = results
+      .filter((result) => result && result.outcome === "failed" && result.error)
+      .map((result) => String(result.error).trim())
+      .filter((reason) => reason);
+    parts.push(reasons.length ? `failed ${failed}: ${reasons.join(" ; ")}` : `failed ${failed}`);
   }
   return parts.join(" · ");
 }
