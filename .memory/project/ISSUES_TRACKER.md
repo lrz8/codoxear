@@ -97,6 +97,8 @@ this session and their closure status. Maintained on disk so the next agent
 - 5 modules extracted: message-flow, session-edit, attachments, unread, unattended
 - ~2268 commits this session
 | 53 | Load-older dead on unscrollable transcript | CLOSED | 64b792ed | `beginOlderLoad` required BROWSING, but a transcript shorter than the viewport never scrolls into BROWSING (observed live on a Pi session whose 8MiB tail window held only 2 of 710 events). Explicit loads now legal from LIVE; scroll-edge auto-loads still BROWSING-only. Docker A/B: parent commit reproduces dead button, fixed commit loads 2->14 rows. Deployed. |
+| 21b | pid_alive is zombie-blind (os.kill(pid,0)); unreaped broker children prune as dead, wiping queue/draft | NOT-CLOSED | — | Found during snapshot-restore e2e: broker as unreaped child of the server (no --init) stays zombie after SIGKILL; prune takes the stale+broker-alive branch, prunes as dead, clear_deleted_session_state wipes queue/draft before restore. Production parents (tmux pane shell, Popen reaper thread, init) reap, so the lost-tombstone path applies there; any deployment whose broker parent never wait()s silently drops queues/drafts on crash |
+| 21c | Duplicate launch-failure records: concurrent prune_dead_sessions passes compute the dead list before either pops, minting 2+ records for one session | NOT-CLOSED | — | Found during snapshot e2e (3 failed cards for one cleanly-exited offline-Pi session; session_launches.jsonl shows same-millisecond records). Narrow race, pre-existing |
 
 ## Verifying this file
 
@@ -106,3 +108,18 @@ Anyone reading this file in a future session should:
 3. Run `wc -l codoxear/static/app.js` and confirm 5226
 4. Run `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8743/` and confirm 200
 5. Update this file if any value diverges
+
+## 2026-09-11 — Voice announcements failing: invalid OpenAI key (resolved)
+
+- Symptom: all voice narrations erroring. Voice errors surface ONLY in
+  `~/.local/share/codoxear/voice_delivery_ledger.json` (`narrated_status`/`last_error`);
+  journald has no voice logging.
+- Root cause: `voice_settings.json` held a revoked/wrong OpenAI key (saved via UI 12:34);
+  before that, no key at all (382 `tts_api_key is required` errors). The valid key lived
+  in `~/.env` (`OPENAI_API_KEY`) and was never synced into voice settings.
+- Fix: copied `~/.env` key into `voice_settings.json` `tts_api_key`, restarted
+  `codoxear-server.service`. Smoke-tested key on both pipeline legs
+  (`/chat/completions` gpt-4.1-mini, `/audio/speech` gpt-4o-mini-tts) → 200.
+- Ops invariant: `voice_push.py` caches voice settings in memory at startup
+  (`_load_settings`); direct edits to `voice_settings.json` require a server restart,
+  only UI saves apply live.
