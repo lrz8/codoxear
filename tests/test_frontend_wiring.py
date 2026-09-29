@@ -30,6 +30,9 @@ def test_wiring_factories_preserve_explicit_controller_dependencies() -> None:
     file_picker_delegate_keys = [
         "fileViewerController", "fileModeControlsRuntime", "filePickerDomRuntime", "filePickerMenuState", "filePickerInput", "filePickerInputRuntime", "activeFilePathValue", "openedFileRuntime", "fileReferenceRuntime", "filePickerSearchState", "filePickerRenderRuntime", "fileViewerPanelRuntime", "sessionState", "sessionCatalog", "stripPathLocationSuffix",
     ]
+    session_snapshot_keys = [
+        "el", "iconSvg", "api", "setToast", "handleAppAuthLoss", "refreshSessions", "isAppDisposed", "sessionCatalog", "sessionsWrap", "eventBindings", "consoleError",
+    ]
     file_picker_interaction_keys = [
         "eventBindings", "fileBtn", "showFileViewer", "filePickerInput", "filePickerInputRuntime", "fileModeDiffBtn", "fileModePreviewBtn", "fileEditBtn", "handleFileDiffModeButtonPress", "handleFilePreviewModeButtonPress", "handleFileEditButtonPress", "fileVideoPreviewBtn", "fileVideoPreviewRuntime", "fileDownloadBtn", "fileDownloadRuntime", "activeFileDownloadApiPath", "codoxearFileViewer", "fileTouchSelectBtn", "fileTouchCopyBtn", "fileTouchPasteBtn", "fileTouchUpBtn", "fileTouchLeftBtn", "fileTouchDownBtn", "fileTouchRightBtn", "toggleFileTouchSelectionMode", "copyActiveFileSelection", "pasteFromClipboardIntoActiveFile", "handleFileTouchMoveButtonPress", "fileCloseBtn", "fileBackdrop", "requestHideFileViewer", "$", "fileUnsavedController", "fileUnsavedBackdrop", "filePasteInput", "handleFilePasteInsert", "hideFilePasteDialog", "filePasteBackdrop", "chatInner", "codeBlockCopyRuntime", "fileReferenceRuntime", "fileDiff", "addAppEvent", "document", "Element", "isFileViewerOpen", "menuState", "closeFilePickerMenu",
     ]
@@ -46,6 +49,7 @@ const filePickerOpsKeys = __FILE_PICKER_OPS_KEYS__;
 const fileEditorOpsKeys = __FILE_EDITOR_OPS_KEYS__;
 const filePickerDelegateKeys = __FILE_PICKER_DELEGATE_KEYS__;
 const filePickerInteractionKeys = __FILE_PICKER_INTERACTION_KEYS__;
+const sessionSnapshotKeys = __SESSION_SNAPSHOT_KEYS__;
 const context = { window: {} };
 vm.createContext(context);
 for (const source of Object.values(sources)) vm.runInContext(source, context);
@@ -70,6 +74,7 @@ const optionContracts = [
   ["fileEditorOps", "createFileEditorOpsOptions", fileEditorOpsKeys],
   ["filePickerDelegates", "createFilePickerOperationDelegatesOptions", filePickerDelegateKeys],
   ["filePickerInteractions", "createFilePickerInteractionsOptions", filePickerInteractionKeys],
+  ["sessionSnapshot", "createSessionSnapshotOptions", sessionSnapshotKeys],
 ].map(([name, factory, keys]) => {
   const projection = wiring[factory]({ ...Object.fromEntries(keys.map((key) => [key, key])), accidental: "must not reach controller" });
   return [name, Object.keys(projection).sort(), Object.values(projection).sort()];
@@ -99,7 +104,7 @@ process.stdout.write(JSON.stringify({
   optionContracts,
   event: { registered: registered.length, type: listeners[0][1], sameHandler: bound === handler, capture: listeners[0][3].capture },
 }));
-""".replace("__SOURCES__", json.dumps(sources)).replace("__TOPBAR_KEYS__", json.dumps(topbar_keys)).replace("__FILE_OPS_KEYS__", json.dumps(file_ops_keys)).replace("__FILE_VIEWER_OPERATIONS_KEYS__", json.dumps(file_viewer_operations_keys)).replace("__FILE_PICKER_OPS_KEYS__", json.dumps(file_picker_ops_keys)).replace("__FILE_EDITOR_OPS_KEYS__", json.dumps(file_editor_ops_keys)).replace("__FILE_PICKER_DELEGATE_KEYS__", json.dumps(file_picker_delegate_keys)).replace("__FILE_PICKER_INTERACTION_KEYS__", json.dumps(file_picker_interaction_keys))
+""".replace("__SOURCES__", json.dumps(sources)).replace("__TOPBAR_KEYS__", json.dumps(topbar_keys)).replace("__FILE_OPS_KEYS__", json.dumps(file_ops_keys)).replace("__FILE_VIEWER_OPERATIONS_KEYS__", json.dumps(file_viewer_operations_keys)).replace("__FILE_PICKER_OPS_KEYS__", json.dumps(file_picker_ops_keys)).replace("__FILE_EDITOR_OPS_KEYS__", json.dumps(file_editor_ops_keys)).replace("__FILE_PICKER_DELEGATE_KEYS__", json.dumps(file_picker_delegate_keys)).replace("__FILE_PICKER_INTERACTION_KEYS__", json.dumps(file_picker_interaction_keys)).replace("__SESSION_SNAPSHOT_KEYS__", json.dumps(session_snapshot_keys))
     completed = subprocess.run(
         ["node", "-e", program],
         check=True,
@@ -121,6 +126,7 @@ process.stdout.write(JSON.stringify({
         ["fileEditorOps", file_editor_ops_keys],
         ["filePickerDelegates", file_picker_delegate_keys],
         ["filePickerInteractions", file_picker_interaction_keys],
+        ["sessionSnapshot", session_snapshot_keys],
     ]
     assert result["optionContracts"] == [[name, sorted(keys), sorted(keys)] for name, keys in expected_contracts]
     assert result["event"] == {"registered": 1, "type": "click", "sameHandler": True, "capture": True}

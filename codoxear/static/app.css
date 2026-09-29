@@ -259,6 +259,54 @@
         padding: var(--space-5) var(--space-6);
         font-size: var(--font-md);
       }
+      /* Snapshot restore row (app_session_snapshot.js). The lead host sits
+         above the scrolling session list and carries the list's horizontal
+         inset; the row itself is the dashed ghost control approved in the
+         design mock. When the lead is visible the list drops its own top
+         padding so the row's margin is the only gap to the first group. */
+      .sessionRestoreLead {
+        flex: 0 0 auto;
+        padding: var(--space-3) var(--space-3) 0;
+      }
+      .sessionRestoreLead[hidden] {
+        display: none;
+      }
+      .sessionRestoreLead:not([hidden]) + .sessions {
+        padding-top: 0;
+      }
+      .sessionRestore {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        width: 100%;
+        margin-bottom: var(--space-3);
+        padding: var(--space-3) var(--space-4);
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-card);
+        background: transparent;
+        color: var(--muted);
+        font-size: var(--font-md);
+        font-weight: 500;
+        line-height: 1;
+        cursor: pointer;
+        text-align: left;
+        position: relative;
+      }
+      /* Hit area is not visual size: the 32px row reaches the 44px target
+         through a vertical ::after lane, like the chrome icon buttons. */
+      .sessionRestore::after {
+        content: "";
+        position: absolute;
+        inset: -6px 0;
+      }
+      .sessionRestore .icon { flex: 0 0 auto; }
+      .sessionRestore:hover { background: var(--surface-subtle); color: var(--ink); }
+      .sessionRestore:disabled,
+      .sessionRestore:disabled:hover {
+        background: transparent;
+        color: var(--muted);
+        cursor: default;
+      }
       .sidebar footer {
         /* Match the one-line composer band: 44px controls plus 3px above and below. */
         padding: 3px var(--space-5);
