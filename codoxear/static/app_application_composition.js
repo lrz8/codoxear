@@ -529,6 +529,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           sessionCatalog,
           sessionsWrap,
           eventBindings,
+          now: Date.now,
           consoleError: (...args) => console.error(...args),
         }));
 

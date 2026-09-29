@@ -7,14 +7,29 @@
  *
  * Feed (documented reconciliation rule): the row's count is
  * `entries.filter((entry) => !entry.live).length` from `GET
- * /api/sessions/snapshot`. That count can only change when the set of live
- * sessions changes (a broker dies, a restore launches, a session is deleted)
- * — every one of which changes the session-list catalog — so the feed refetches
- * the snapshot only when the catalog's liveness key (session ids plus their
- * `lost` flag) differs from the last fetched one, plus once after each restore.
- * Busy/idle churn within the same session set never triggers a fetch, so the
- * feed coalesces with the existing session-list poll instead of adding a loop.
+ * /api/sessions/snapshot`. The feed has two triggers, both evaluated inside
+ * the catalog subscription so an idle app never gains traffic:
+ *
+ * 1. Liveness key. The count usually changes when the set of live sessions
+ *    changes (a broker dies, a restore launches, a session is deleted) — every
+ *    one of which changes the session-list catalog — so a catalog generation
+ *    whose liveness key (session ids plus their `lost` flag) differs from the
+ *    last fetched one refetches immediately, plus once after each restore.
+ * 2. Cadence safety net. The server's `live` annotation can also change
+ *    without the key moving: a lost session's orphaned agent process still
+ *    counts as live until it dies, and a Codex/Claude Code resume that binds
+ *    its log late is annotated live only afterwards. So a catalog generation
+ *    also refetches when more than `SNAPSHOT_REFETCH_INTERVAL_MS` has passed
+ *    since the last answered fetch (a server answer, including a 404/5xx that
+ *    commits the empty state; transport loss does not count, and a row that
+ *    has never been answered is treated as stale).
+ *
+ * Busy/idle churn within the same session set and inside the cadence window
+ * never triggers a fetch, so the feed coalesces with the existing session-list
+ * poll instead of adding a loop.
  */
+
+const SNAPSHOT_REFETCH_INTERVAL_MS = 60_000;
 
 function requireFunction(value, name) {
   if (typeof value !== "function") throw new TypeError(`session snapshot dependency missing: ${name}`);
@@ -84,6 +99,7 @@ function createSessionSnapshotController(options = {}) {
   const isAppDisposed = requireFunction(options.isAppDisposed, "isAppDisposed");
   const sessionCatalog = requireSessionCatalog(options.sessionCatalog);
   const sessionsWrap = requireNode(options.sessionsWrap, "sessionsWrap");
+  const now = requireFunction(options.now, "now");
   const eventBindings = options.eventBindings;
   if (!eventBindings || typeof eventBindings.on !== "function") {
     throw new TypeError("session snapshot dependency missing: eventBindings");
@@ -107,6 +123,8 @@ function createSessionSnapshotController(options = {}) {
   // Store: the only inputs the projection reads.
   const state = { entries: [], restoring: false };
   let fetchedKey = null;
+  // Wall-clock ms of the last fetch the server answered; null until then.
+  let answeredAt = null;
   let fetchInFlight = null;
   let fetchQueued = false;
 
@@ -136,11 +154,15 @@ function createSessionSnapshotController(options = {}) {
       }
       // A server answer without a snapshot (404/5xx) means no restorable
       // entries are known; a transport failure keeps the last known state.
-      if (error && typeof error.status === "number") commit({ entries: [] });
+      if (error && typeof error.status === "number") {
+        answeredAt = now();
+        commit({ entries: [] });
+      }
       consoleError("session snapshot fetch failed", error);
       return;
     }
     if (isAppDisposed()) return;
+    answeredAt = now();
     commit({ entries: Array.isArray(data && data.entries) ? data.entries.slice() : [] });
   }
 
@@ -162,9 +184,13 @@ function createSessionSnapshotController(options = {}) {
     return fetchInFlight;
   }
 
+  function cadenceStale() {
+    return answeredAt === null || now() - answeredAt > SNAPSHOT_REFETCH_INTERVAL_MS;
+  }
+
   function onCatalogGeneration(sessions) {
     const key = livenessKey(sessions);
-    if (key === fetchedKey) return;
+    if (key === fetchedKey && !cadenceStale()) return;
     fetchedKey = key;
     void refresh();
   }
@@ -224,4 +250,11 @@ function createSessionSnapshotController(options = {}) {
   });
 }
 
-export { createSessionSnapshotController, restoreSummaryText, restoreLabel, restorableEntries, livenessKey };
+export {
+  createSessionSnapshotController,
+  restoreSummaryText,
+  restoreLabel,
+  restorableEntries,
+  livenessKey,
+  SNAPSHOT_REFETCH_INTERVAL_MS,
+};

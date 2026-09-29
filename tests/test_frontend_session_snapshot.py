@@ -2,8 +2,9 @@
 
 The controller is executed inside Node's vm against a small fake DOM and a
 scripted API. Assertions cover the rendered row (count, singular/plural,
-visibility), the catalog-driven feed (fetch only when the live session set
-changes), one-click restore (single POST, re-entry guard, disabled while in
+visibility), the catalog-driven feed (fetch when the live session set changes,
+plus the slow-cadence safety net evaluated on catalog generations only),
+one-click restore (single POST, re-entry guard, disabled while in
 flight, list refresh, snapshot refetch), toast composition per outcome mix, and
 hint-mode discovery of the row as an activatable control.
 """
@@ -143,6 +144,8 @@ def harness(body: str, *, extra_modules: tuple = ()) -> dict:
         let restoreResponse = {{ results: [], restored: 0, skipped: 0, failed: 0 }};
         let restoreGate = null;
         let getFailure = null;
+        let clock = 1_000_000;
+        const now = () => clock;
         const api = async (path, options = {{}}) => {{
           const method = options.method || "GET";
           calls.push({{ path, method, body: options.body === undefined ? null : options.body }});
@@ -168,6 +171,7 @@ def harness(body: str, *, extra_modules: tuple = ()) -> dict:
           sessionCatalog,
           sessionsWrap,
           eventBindings,
+          now,
           consoleError: (message) => errors.push(String(message)),
         }});
         const {{ host, button, label }} = controller.elements;
@@ -268,7 +272,7 @@ def test_feed_refetches_only_when_the_live_session_set_changes() -> None:
         // Replace the GET path with a gated variant for this window only.
         const controller2 = ctx.window.CodoxearSessionSnapshot.createSessionSnapshotController({
           el, iconSvg: () => "", setToast: () => {}, handleAppAuthLoss: () => {}, refreshSessions: async () => {},
-          isAppDisposed: () => false, sessionCatalog, sessionsWrap, eventBindings, consoleError: () => {},
+          isAppDisposed: () => false, sessionCatalog, sessionsWrap, eventBindings, now, consoleError: () => {},
           api: async (path) => { calls.push({ path, method: "GET", gated: true }); if (gated) await gate; return JSON.parse(JSON.stringify(slowSnapshot)); },
         });
         sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "p" }] });
@@ -289,6 +293,87 @@ def test_feed_refetches_only_when_the_live_session_set_changes() -> None:
     assert result == {
         "afterFirst": 1, "afterChurn": 1, "afterLost": 2, "afterRemoval": 3, "visible": True,
         "coalesced": {"extraFetches": 1, "text": "Restore 2 saved sessions"},
+    }
+
+
+def test_feed_cadence_refetches_an_unchanged_live_set_only_after_the_window_on_a_catalog_generation() -> None:
+    """The server's `live` annotation can move without the liveness key (an orphaned
+    agent process dies later; a late log bind), so a catalog generation older than
+    the window since the last answered fetch refetches. Time alone never fetches."""
+    result = harness(
+        """
+        const interval = ctx.window.CodoxearSessionSnapshot.SNAPSHOT_REFETCH_INTERVAL_MS;
+        const sessions = [{ session_id: "a", lost: true }];
+        snapshot = { saved_at: 1, entries: [{ session_id: "a", live: true }] };
+        sessionCatalog.applySnapshot({ latestSessions: sessions });
+        await flush();
+        const afterFirst = { gets: gets(), hidden: host.hidden };
+        // The orphan dies: the server now annotates the entry restorable, but the key is unchanged.
+        snapshot = { saved_at: 1, entries: [{ session_id: "a", live: false }] };
+        // Time passes with no catalog generation: nothing fetches.
+        clock += interval * 3;
+        await flush();
+        const afterSilentWait = { gets: gets(), hidden: host.hidden };
+        // Reset the clock reference by forcing a key-triggered fetch, then probe the window edges.
+        sessionCatalog.applySnapshot({ latestSessions: [...sessions, { session_id: "b" }] });
+        await flush();
+        sessionCatalog.applySnapshot({ latestSessions: sessions });
+        await flush();
+        const baseline = gets();
+        clock += interval - 1;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: true }] });
+        await flush();
+        const beforeWindow = gets() - baseline;
+        clock += 1;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: false }] });
+        await flush();
+        const atWindow = gets() - baseline;
+        clock += 1;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: true }] });
+        await flush();
+        const pastWindow = { gets: gets() - baseline, hidden: host.hidden, text: label.textContent };
+        // The answered fetch restarts the window: the next generation is inside it again.
+        clock += interval;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: false }] });
+        await flush();
+        const insideNewWindow = gets() - baseline;
+        // Transport loss does not count as an answer: the following generation retries.
+        clock += 1;
+        getFailure = new TypeError("Failed to fetch");
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: true }] });
+        await flush();
+        const lostTransport = gets() - baseline;
+        getFailure = null;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: false }] });
+        await flush();
+        const retriedAfterLoss = gets() - baseline;
+        // An answered fetch closes the window even when that answer is 404: no per-poll storm.
+        clock += interval + 1;
+        getFailure = Object.assign(new Error("not found"), { status: 404 });
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: true }] });
+        await flush();
+        const serverAnswered = gets() - baseline;
+        getFailure = null;
+        sessionCatalog.applySnapshot({ latestSessions: [{ session_id: "a", lost: true, busy: false }] });
+        await flush();
+        const afterServerAnswer = gets() - baseline;
+        process.stdout.write(JSON.stringify({
+          afterFirst, afterSilentWait, beforeWindow, atWindow, pastWindow, insideNewWindow,
+          lostTransport, retriedAfterLoss, serverAnswered, afterServerAnswer,
+        }));
+        """
+    )
+    assert result == {
+        "afterFirst": {"gets": 1, "hidden": True},
+        "afterSilentWait": {"gets": 1, "hidden": True},
+        "beforeWindow": 0,
+        "atWindow": 0,
+        "pastWindow": {"gets": 1, "hidden": False, "text": "Restore 1 saved session"},
+        "insideNewWindow": 1,
+        "lostTransport": 2,
+        "retriedAfterLoss": 3,
+        "serverAnswered": 4,
+        "afterServerAnswer": 4,
     }
 
 
