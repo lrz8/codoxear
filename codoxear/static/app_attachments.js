@@ -4,6 +4,21 @@
   // all attachment-specific DOM/event state. The server's staged list remains
   // authoritative; direct mutation responses update this projection until the
   // next session refresh replaces it.
+  //
+  // Pending uploads are local-only optimistic tray entries created
+  // synchronously when files are staged, so pasting/dropping/picking gives
+  // immediate visual feedback (thumbnail + phase) before the server
+  // round-trip completes. They never merge into stagedAttachments.
+  // Reconciliation: when a file's inject_file response arrives, its pending
+  // entry is removed and the response's authoritative list commits in the
+  // same tick, so the attach badge (staged count + active pending count)
+  // never double-counts. A successful handoff moves the entry's object-URL
+  // thumbnail into localThumbs keyed by the server attachment id (the server
+  // has no attachment-bytes endpoint, so thumbnails are page-lifetime local);
+  // renderStagedAttachments prunes any localThumbs id absent from the current
+  // staged list, covering remove, clear, and session switch through one
+  // funnel. Pending uploads are selected-session scoped: a selected change
+  // aborts and clears them.
 
   function requireFunction(value, name) {
     if (typeof value !== "function") throw new TypeError(`attachments controller dependency missing: ${name}`);
@@ -63,7 +78,16 @@
       throw new TypeError("attachments controller dependency missing: uploadMaxBytes");
 
     let stagedAttachments = [];
+    let pendingUploads = [];
+    const localThumbs = new Map();
+    const freshIds = new Set();
+    const pendingTimers = new Map();
     let composerDragDepth = 0;
+    const globalSetTimeout = typeof setTimeout === "function" ? setTimeout : null;
+    const globalClearTimeout = typeof clearTimeout === "function" ? clearTimeout : null;
+    const AbortCtor = typeof AbortController === "function" ? AbortController : null;
+    const objectUrlApi =
+      typeof URL !== "undefined" && URL && typeof URL.createObjectURL === "function" ? URL : null;
     const attachBadgeEl = el("span", { class: "attachBadge", id: "attachBadge" });
     attachBtn.appendChild(attachBadgeEl);
 
@@ -98,6 +122,119 @@
       const left = Math.ceil((limit - 1) / 2);
       const right = Math.floor((limit - 1) / 2);
       return `${value.slice(0, left)}…${value.slice(-right)}`;
+    }
+
+    function createThumbUrl(file) {
+      if (!objectUrlApi) return "";
+      try {
+        return objectUrlApi.createObjectURL(file);
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function revokeThumbUrl(url) {
+      if (!url || !objectUrlApi || typeof objectUrlApi.revokeObjectURL !== "function") return;
+      try {
+        objectUrlApi.revokeObjectURL(url);
+      } catch (_) {
+        // Revocation is best-effort cleanup; a failure only leaks until page unload.
+      }
+    }
+
+    function getPendingUpload(key) {
+      return pendingUploads.find((entry) => entry.key === key) || null;
+    }
+
+    function addPendingUploads(entries) {
+      if (!entries.length) return;
+      pendingUploads = pendingUploads.concat(entries);
+      renderStagedAttachments();
+      resizeComposer();
+      projectSelectedAttachmentIndicator();
+    }
+
+    function removePendingUpload(key) {
+      const timer = pendingTimers.get(key);
+      if (timer != null) {
+        pendingTimers.delete(key);
+        if (globalClearTimeout) globalClearTimeout(timer);
+      }
+      const entry = getPendingUpload(key);
+      if (!entry) return;
+      revokeThumbUrl(entry.thumbUrl);
+      pendingUploads = pendingUploads.filter((item) => item.key !== key);
+      renderStagedAttachments();
+      resizeComposer();
+      projectSelectedAttachmentIndicator();
+    }
+
+    function schedulePendingRemoval(key, delayMs) {
+      if (!globalSetTimeout) {
+        removePendingUpload(key);
+        return;
+      }
+      if (pendingTimers.has(key)) return;
+      pendingTimers.set(key, globalSetTimeout(() => removePendingUpload(key), delayMs));
+    }
+
+    function clearPendingUploads() {
+      if (!pendingUploads.length) return;
+      for (const entry of pendingUploads) {
+        entry.canceled = true;
+        if (entry.abortController) {
+          try {
+            entry.abortController.abort();
+          } catch (_) {
+            // Abort is best-effort; the response guard drops late completions.
+          }
+        }
+        revokeThumbUrl(entry.thumbUrl);
+      }
+      pendingUploads = [];
+      for (const timer of pendingTimers.values()) {
+        if (globalClearTimeout) globalClearTimeout(timer);
+      }
+      pendingTimers.clear();
+      renderStagedAttachments();
+      resizeComposer();
+      projectSelectedAttachmentIndicator();
+    }
+
+    function hasPendingUploads() {
+      return pendingUploads.some((entry) => !entry.done && !entry.failed);
+    }
+
+    function cancelPendingUpload(key) {
+      const entry = getPendingUpload(key);
+      if (!entry) return;
+      entry.canceled = true;
+      if (entry.abortController) {
+        try {
+          entry.abortController.abort();
+        } catch (_) {
+          // Abort is best-effort; the response guard drops late completions.
+        }
+      }
+      removePendingUpload(key);
+      // No explicit refresh here: a cancel always lands mid-batch, and the
+      // stageFiles tail already reconciles via refreshAfterAttachmentMutation.
+    }
+
+    function markFreshStaged(attachmentId) {
+      freshIds.add(attachmentId);
+      if (globalSetTimeout) globalSetTimeout(() => freshIds.delete(attachmentId), 1200);
+    }
+
+    function matchNewAttachment(list, entry, beforeIds) {
+      const fresh = list.filter((item) => item && item.id && !beforeIds.has(item.id));
+      if (fresh.length === 1) return fresh[0];
+      const byName = list.filter((item) => item && String(item.display_name || item.filename || "") === entry.name);
+      return byName[byName.length - 1] || fresh[0] || null;
+    }
+
+    function isAbortError(error) {
+      return Boolean(error && (error.name === "AbortError" || error.code === 20));
     }
 
     function getStagedAttachments() {
@@ -142,17 +279,47 @@
       });
     }
 
+    function renderPendingChip(entry) {
+      const phaseText = entry.failed ? "failed" : entry.phase;
+      const chip = el("div", {
+        class: "stagedAttachmentChip",
+        "data-pending": "1",
+        title: entry.failed ? entry.failReason || "upload failed" : `${entry.name} · ${phaseText}`,
+      });
+      if (entry.failed) chip.setAttribute("data-failed", "1");
+      if (entry.thumbUrl) chip.appendChild(el("img", { class: "stagedAttachmentThumb", src: entry.thumbUrl, alt: "" }));
+      chip.appendChild(el("span", { class: "stagedAttachmentName", text: middleEllipsis(entry.name) }));
+      chip.appendChild(el("span", { class: "stagedAttachmentPhase", text: phaseText }));
+      const cancelBtn = el("button", { class: "stagedAttachmentRemove", type: "button", text: "×", title: `Cancel ${entry.name}`, "aria-label": `Cancel ${entry.name}` });
+      cancelBtn.onclick = () => cancelPendingUpload(entry.key);
+      chip.appendChild(cancelBtn);
+      return chip;
+    }
+
     function renderStagedAttachments() {
+      const liveIds = new Set(stagedAttachments.map((item) => item.id));
+      for (const id of Array.from(localThumbs.keys())) {
+        if (!liveIds.has(id)) {
+          revokeThumbUrl(localThumbs.get(id));
+          localThumbs.delete(id);
+        }
+      }
       const tray = getTray();
       if (!tray) return;
       tray.innerHTML = "";
-      if (!stagedAttachments.length) {
+      if (!stagedAttachments.length && !pendingUploads.length) {
         tray.style.display = "none";
         return;
       }
       tray.style.display = "flex";
+      for (const entry of pendingUploads) {
+        tray.appendChild(renderPendingChip(entry));
+      }
       for (const item of stagedAttachments) {
         const chip = el("div", { class: "stagedAttachmentChip", title: attachmentIdentityText(item) });
+        if (freshIds.has(item.id)) chip.setAttribute("data-fresh", "1");
+        const thumbUrl = localThumbs.get(item.id) || "";
+        if (thumbUrl) chip.appendChild(el("img", { class: "stagedAttachmentThumb", src: thumbUrl, alt: "" }));
         const name = item.display_name || item.filename || "file";
         chip.appendChild(el("span", { class: "stagedAttachmentName", text: middleEllipsis(name) }));
         chip.appendChild(el("span", { class: "stagedAttachmentMeta", text: fmtBytes(item.size || 0) }));
@@ -178,6 +345,7 @@
         chip.appendChild(removeBtn);
         tray.appendChild(chip);
       }
+      if (!stagedAttachments.length) return;
       const clearBtn = el("button", { class: "stagedAttachmentsClear", type: "button", text: "Clear", title: "Clear staged attachments", "aria-label": "Clear staged attachments" });
       clearBtn.onclick = async () => {
         const sessionId = sessionState.get("selected");
@@ -205,7 +373,8 @@
       const sessionInfo = sessionId ? getSessionInfo(sessionId) : null;
       const serverListCount = sessionInfo && Array.isArray(sessionInfo.staged_attachments) ? normalizedStagedAttachments(sessionInfo.staged_attachments).length : 0;
       const serverPending = Boolean(sessionInfo && sessionInfo.pending_attachment);
-      const visible = Math.max(stagedAttachments.length, serverListCount, serverPending ? 1 : 0);
+      const pendingActive = pendingUploads.filter((entry) => !entry.done).length;
+      const visible = Math.max(stagedAttachments.length, serverListCount, serverPending ? 1 : 0) + pendingActive;
       if (visible > 0) {
         attachBadgeEl.textContent = String(visible);
         attachBadgeEl.style.display = "inline-flex";
@@ -308,25 +477,43 @@
       if (!uploadFiles.length) return false;
 
       const producer = String(source || "picker");
-      const progressVerb = producer === "paste" ? "pasting" : producer === "drop" ? "dropping" : "uploading";
       const producerNameSeed = now();
+      const entries = uploadFiles.map((file, fileIndex) => {
+        const name = file.name || (producer === "paste" ? pastedFileName(file, fileIndex, producerNameSeed) : "file");
+        const needsCompression = looksLikeImage(file) && (file.size > uploadMaxBytes || isLikelyHeic(file));
+        return {
+          key: `upload-${producerNameSeed}-${fileIndex}`,
+          sessionId,
+          name,
+          size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
+          phase: needsCompression ? "compressing" : "uploading",
+          done: false,
+          failed: false,
+          failReason: "",
+          canceled: false,
+          thumbUrl: looksLikeImage(file) ? createThumbUrl(file) : "",
+          abortController: null,
+        };
+      });
+      addPendingUploads(entries);
+
       let successes = 0;
       let stoppedByBlocker = "";
       const failures = [];
       for (let fileIndex = 0; fileIndex < uploadFiles.length; fileIndex += 1) {
         const file = uploadFiles[fileIndex];
+        const entry = entries[fileIndex];
         try {
           if (sessionState.get("selected") !== sessionId) break;
+          if (entry.canceled) continue;
           const attachBlocker = latestAttachmentBlockerForSession(sessionId);
           if (attachBlocker) {
             stoppedByBlocker = attachBlocker;
             break;
           }
-          setToast(uploadFiles.length > 1 ? `${progressVerb} ${fileIndex + 1}/${uploadFiles.length}...` : "uploading file...");
           let uploadBlob = file;
-          let uploadName = file.name || (producer === "paste" ? pastedFileName(file, fileIndex, producerNameSeed) : "file");
+          let uploadName = entry.name;
           if (looksLikeImage(file) && (file.size > uploadMaxBytes || isLikelyHeic(file))) {
-            setToast("compressing image...");
             const stem = safeAttachmentStem(uploadName);
             uploadName = `${stem}.jpg`;
             const tries = [
@@ -343,24 +530,69 @@
             }
             if (!blob || blob.size > uploadMaxBytes) throw new Error(`image too large (max ${fmtBytes(uploadMaxBytes)})`);
             uploadBlob = blob;
+            entry.name = uploadName;
+            entry.size = blob.size;
           }
+          entry.phase = "uploading";
+          renderStagedAttachments();
           const bytes = await uploadBlob.arrayBuffer();
+          if (entry.canceled) continue;
           if (bytes.byteLength > uploadMaxBytes) throw new Error(`file too large (max ${fmtBytes(uploadMaxBytes)})`);
+          const beforeIds = new Set(stagedAttachments.map((item) => item.id));
+          const controller = AbortCtor ? new AbortCtor() : null;
+          entry.abortController = controller;
           const response = await api(`/api/sessions/${sessionId}/inject_file`, {
             method: "POST",
             body: { filename: uploadName, data_b64: b64FromBytes(new Uint8Array(bytes)) },
+            ...(controller ? { signal: controller.signal } : {}),
           });
           if (sessionState.get("selected") === sessionId && response && response.ok) {
             successes += 1;
-            setSelectedSessionStagedAttachments(Array.isArray(response.attachments) ? response.attachments : []);
+            const normalized = normalizedStagedAttachments(Array.isArray(response.attachments) ? response.attachments : []);
+            const matched = matchNewAttachment(normalized, entry, beforeIds);
+            if (matched && entry.thumbUrl) {
+              localThumbs.set(matched.id, entry.thumbUrl);
+              entry.thumbUrl = "";
+              markFreshStaged(matched.id);
+            }
+            entry.done = true;
+            // Commit the staged list before dropping the pending chip: the
+            // render inside removal prunes localThumbs ids absent from the
+            // staged list, so the handoff must already be visible there.
+            setSelectedSessionStagedAttachments(normalized);
+            removePendingUpload(entry.key);
+          } else {
+            removePendingUpload(entry.key);
           }
         } catch (error) {
           if (error && error.status === 401) {
             handleAppAuthLoss();
+            clearPendingUploads();
             return false;
           }
-          failures.push(`${file && file.name ? file.name : "file"}: ${error && error.message ? error.message : "unknown error"}`);
+          if (entry.canceled || isAbortError(error)) {
+            // cancelPendingUpload already removed the entry and refreshed when
+            // the user clicked ×; a session-switch abort leaves nothing to do.
+            const wasRegistered = Boolean(getPendingUpload(entry.key));
+            removePendingUpload(entry.key);
+            if (wasRegistered && sessionState.get("selected") === sessionId) refreshAfterAttachmentMutation();
+            continue;
+          }
+          failures.push(`${entry.name || "file"}: ${error && error.message ? error.message : "unknown error"}`);
+          if (sessionState.get("selected") === sessionId) {
+            entry.failed = true;
+            entry.failReason = error && error.message ? String(error.message) : "unknown error";
+            renderStagedAttachments();
+            schedulePendingRemoval(entry.key, 2000);
+          } else {
+            removePendingUpload(entry.key);
+          }
         }
+      }
+      // Entries the loop never reached (blocker stop, selection change, or a
+      // canceled skip that left the chip behind) must not linger in the tray.
+      for (const entry of entries) {
+        if (!entry.done && !entry.failed && pendingUploads.includes(entry)) removePendingUpload(entry.key);
       }
       if (sessionState.get("selected") === sessionId) {
         if (successes && failures.length) setToast(`attached ${successes}; ${failures.length} failed: ${failures[0]}`);
@@ -477,6 +709,7 @@
 
     const unsubscribeSessionState = [
       sessionState.subscribe("selected", syncAttachButtonState),
+      sessionState.subscribe("selected", clearPendingUploads),
       sessionState.subscribe("sending", syncAttachButtonState),
       sessionCatalog.subscribe("sessionIndex", syncAttachButtonState),
     ];
@@ -493,8 +726,10 @@
       attachmentBlockerForSession,
       syncAttachButtonState,
       stageFiles,
+      hasPendingUploads,
       projectSelectedAttachmentIndicator,
       dispose() {
+        clearPendingUploads();
         while (unsubscribeSessionState.length) unsubscribeSessionState.pop()();
       },
     });

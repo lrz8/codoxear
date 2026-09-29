@@ -20,6 +20,11 @@ def run_attachments(body: str) -> dict:
         f"""
         const vm = require("vm");
         const listeners = new Map();
+        const scheduled = [];
+        class FakeAbortController {{
+          constructor() {{ this.signal = {{ aborted: false, listeners: [] }}; }}
+          abort() {{ this.signal.aborted = true; this.signal.listeners.slice().forEach((fn) => fn()); }}
+        }}
         function node(id) {{
           const nodeListeners = new Map();
           const classes = new Set();
@@ -53,6 +58,10 @@ def run_attachments(body: str) -> dict:
           window: {{ innerWidth: 1200, innerHeight: 800, addEventListener() {{}}, removeEventListener() {{}} }},
           document: {{ documentElement: {{}}, body: {{}} }},
           Event: function Event(type, options) {{ this.type = type; this.options = options; }},
+          setTimeout: (fn, ms) => {{ const timer = {{ fn, ms, cleared: false }}; scheduled.push(timer); return scheduled.length; }},
+          clearTimeout: (id) => {{ const timer = scheduled[id - 1]; if (timer) timer.cleared = true; }},
+          AbortController: FakeAbortController,
+          URL: {{ createObjectURL: (file) => `blob:thumb-${{file && file.name ? file.name : "x"}}`, revokeObjectURL: () => {{}} }},
           Uint8Array, console,
         }};
         vm.createContext(ctx);
@@ -62,16 +71,25 @@ def run_attachments(body: str) -> dict:
         function el(tag, attrs = {{}}) {{
           const out = node(tag);
           out.tag = tag;
-          out.className = attrs.class || "";
-          out.title = attrs.title || "";
-          out.textContent = attrs.text || "";
-          if (attrs["aria-label"]) out.attrs["aria-label"] = attrs["aria-label"];
+          for (const [key, value] of Object.entries(attrs)) {{
+            if (key === "class") out.className = value;
+            else if (key === "text") out.textContent = value;
+            else {{
+              out.attrs[key] = String(value);
+              if (key === "title") out.title = value;
+            }}
+          }}
           return out;
         }}
         const sessionState = ctx.window.CodoxearSessionState.createSessionState({{ consoleError: () => {{}} }});
         sessionState.set("selected", selected);
         const sessionCatalog = ctx.window.CodoxearSessionCatalog.createSessionCatalog({{ consoleError: () => {{}} }});
         sessionCatalog.set("latestSessions", Array.from(sessions.values()));
+        let apiImpl = async () => ({{ ok: true, attachments: [
+          {{ id: "att-1", display_name: "report.txt", filename: "server-report.txt", size: "5", created_ts: "8" }},
+          {{ id: "att-1", display_name: "duplicate.txt", size: 10 }},
+          {{ id: "", display_name: "invalid.txt" }},
+        ] }});
         const controller = ctx.window.CodoxearAttachments.createAttachmentsController({{
           attachBtn, imgInput, composer, textarea, sessionState, sessionCatalog,
           sessionLaunchFailed: (info) => !!(info && info.launch_state === "failed"),
@@ -80,18 +98,14 @@ def run_attachments(body: str) -> dict:
           sessionHasOrphanQueueRecovery: (info) => !!(info && info.queue_recovery),
           api: async (path, options) => {{
             apiCalls.push({{ path, body: options.body }});
-            return {{ ok: true, attachments: [
-              {{ id: "att-1", display_name: "report.txt", filename: "server-report.txt", size: "5", created_ts: "8" }},
-              {{ id: "att-1", display_name: "duplicate.txt", size: 10 }},
-              {{ id: "", display_name: "invalid.txt" }},
-            ] }};
+            return apiImpl(path, options);
           }},
           setToast: (text) => toasts.push(text), handleAppAuthLoss: () => toasts.push("auth-loss"),
           refreshSessions: async () => pollCalls.push("refresh"),
           setPollFastUntilMs: (value) => pollCalls.push(["fast", value]), kickPoll: (value) => pollCalls.push(["kick", value]),
           resizeComposer: () => pollCalls.push("resize"), getTray: () => tray, el,
           fmtBytes: (bytes) => `${{bytes}} B`, safeAttachmentStem: (name) => name,
-          isLikelyHeic: () => false, looksLikeImage: () => false,
+          isLikelyHeic: () => false, looksLikeImage: (file) => String(file && file.type || "").startsWith("image/"),
           b64FromBytes: (bytes) => Buffer.from(bytes).toString("base64"),
           dataTransferHasFiles: () => false, extractFilesFromClipboardData: () => [], extractFilesFromDropData: () => [],
           addEventListener: (target, type, handler) => target.addEventListener(type, handler),
@@ -107,6 +121,10 @@ def run_attachments(body: str) -> dict:
         script_file.write(script)
     try:
         completed = subprocess.run(["node", script_file.name], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        print("NODE STDERR:\n" + (exc.stderr or ""))
+        print("NODE STDOUT:\n" + (exc.stdout or ""))
+        raise
     finally:
         Path(script_file.name).unlink(missing_ok=True)
     return json.loads(completed.stdout)
@@ -189,3 +207,159 @@ def test_send_cleanup_clears_selected_attachment_projection() -> None:
         "badge": {"text": "", "display": "none"},
         "trayDisplay": "none",
     }
+
+
+def test_pending_chip_shows_synchronously_and_swaps_to_staged_with_thumbnail() -> None:
+    result = run_attachments(
+        """
+        apiImpl = (path, options) => new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, attachments: [
+            { id: "att-9", display_name: options.body.filename, filename: options.body.filename, size: 3, created_ts: 1 },
+          ] }), 0);
+        });
+        const file = { name: "shot.png", size: 3, type: "image/png", arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+        const stagedPromise = controller.stageFiles([file], { sid: "sid", source: "paste" });
+        const pendingChip = tray.children[0];
+        const syncState = {
+          chips: tray.children.length,
+          trayDisplay: tray.style.display,
+          pending: pendingChip.attrs["data-pending"] || "",
+          thumb: pendingChip.children[0] && pendingChip.children[0].attrs ? pendingChip.children[0].attrs.src || "" : "",
+          phase: pendingChip.children.map((c) => c.className).join(","),
+          badge: attachBtn.children[0].textContent,
+          hasPending: controller.hasPendingUploads(),
+          uploadCalls: apiCalls.length,
+        };
+        stagedPromise.then((staged) => {
+          const stagedChip = tray.children[0];
+          process.stdout.write(JSON.stringify({
+            syncState,
+            staged,
+            finalChips: tray.children.length,
+            fresh: stagedChip.attrs["data-fresh"] || "",
+            finalPending: stagedChip.attrs["data-pending"] || "",
+            finalThumb: stagedChip.children[0] && stagedChip.children[0].attrs ? stagedChip.children[0].attrs.src || "" : "",
+            finalBadge: attachBtn.children[0].textContent,
+            hasPendingAfter: controller.hasPendingUploads(),
+            toasts,
+          }));
+        });
+        """
+    )
+    assert result["syncState"] == {
+        "chips": 1,
+        "trayDisplay": "flex",
+        "pending": "1",
+        "thumb": "blob:thumb-shot.png",
+        "phase": "stagedAttachmentThumb,stagedAttachmentName,stagedAttachmentPhase,stagedAttachmentRemove",
+        "badge": "1",
+        "hasPending": True,
+        "uploadCalls": 0,
+    }
+    assert result["staged"] is True
+    assert result["finalChips"] == 2  # staged chip + Clear button
+    assert result["fresh"] == "1"
+    assert result["finalPending"] == ""
+    assert result["finalThumb"] == "blob:thumb-shot.png"
+    assert result["finalBadge"] == "1"
+    assert result["hasPendingAfter"] is False
+    assert result["toasts"] == ["file staged"]
+
+
+def test_failed_upload_holds_error_chip_then_timer_removes_it() -> None:
+    result = run_attachments(
+        """
+        apiImpl = async () => { throw new Error("file too large (max 1.0 KB)"); };
+        const file = { name: "big.png", size: 5, type: "image/png", arrayBuffer: async () => new Uint8Array([1, 2, 3, 4, 5]).buffer };
+        controller.stageFiles([file], { sid: "sid", source: "paste" }).then((staged) => {
+          const failedChip = tray.children.find((c) => c.attrs["data-failed"]);
+          const failureTimers = scheduled.filter((t) => t.ms === 2000 && !t.cleared);
+          failureTimers.forEach((t) => t.fn());
+          process.stdout.write(JSON.stringify({
+            staged,
+            failedShown: Boolean(failedChip),
+            failTitle: failedChip ? failedChip.title : "",
+            hasPendingWhileFailed: controller.hasPendingUploads(),
+            chipsAfterTimer: tray.children.length,
+            trayDisplayAfterTimer: tray.style.display,
+            toasts,
+          }));
+        });
+        """
+    )
+    assert result["staged"] is False
+    assert result["failedShown"] is True
+    assert result["failTitle"] == "file too large (max 1.0 KB)"
+    assert result["hasPendingWhileFailed"] is False
+    assert result["chipsAfterTimer"] == 0
+    assert result["trayDisplayAfterTimer"] == "none"
+    assert result["toasts"] == ["attach error: big.png: file too large (max 1.0 KB)"]
+
+
+def test_cancel_pending_upload_aborts_and_clears_without_error_toast() -> None:
+    result = run_attachments(
+        """
+        apiImpl = (path, options) => new Promise((resolve, reject) => {
+          options.signal.listeners.push(() => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        });
+        const file = { name: "shot.png", size: 3, type: "image/png", arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+        const stagedPromise = controller.stageFiles([file], { sid: "sid", source: "paste" });
+        const pendingChip = tray.children[0];
+        const cancelBtn = pendingChip.children.find((c) => c.className === "stagedAttachmentRemove");
+        const hasBefore = controller.hasPendingUploads();
+        cancelBtn.onclick();
+        stagedPromise.then((staged) => {
+          process.stdout.write(JSON.stringify({
+            staged,
+            hasBefore,
+            hasAfter: controller.hasPendingUploads(),
+            chips: tray.children.length,
+            trayDisplay: tray.style.display,
+            refreshed: pollCalls.filter((c) => c === "refresh").length,
+            toasts,
+          }));
+        });
+        """
+    )
+    assert result["staged"] is False
+    assert result["hasBefore"] is True
+    assert result["hasAfter"] is False
+    assert result["chips"] == 0
+    assert result["trayDisplay"] == "none"
+    assert result["refreshed"] == 1
+    assert result["toasts"] == []
+
+
+def test_session_switch_aborts_pending_upload_without_touching_old_session() -> None:
+    result = run_attachments(
+        """
+        apiImpl = (path, options) => new Promise((resolve, reject) => {
+          options.signal.listeners.push(() => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        });
+        sessions.set("other", { session_id: "other", launch_state: "ready" });
+        const file = { name: "shot.png", size: 3, type: "image/png", arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+        const stagedPromise = controller.stageFiles([file], { sid: "sid", source: "paste" });
+        const chipsBeforeSwitch = tray.children.length;
+        sessionState.set("selected", "other");
+        stagedPromise.then((staged) => {
+          process.stdout.write(JSON.stringify({
+            staged,
+            chipsBeforeSwitch,
+            chips: tray.children.length,
+            trayDisplay: tray.style.display,
+            hasAfter: controller.hasPendingUploads(),
+            oldSession: sessions.get("sid"),
+            refreshed: pollCalls.filter((c) => c === "refresh").length,
+            toasts,
+          }));
+        });
+        """
+    )
+    assert result["staged"] is False
+    assert result["chipsBeforeSwitch"] == 1
+    assert result["chips"] == 0
+    assert result["trayDisplay"] == "none"
+    assert result["hasAfter"] is False
+    assert result["oldSession"] == {"session_id": "sid", "launch_state": "ready"}
+    assert result["refreshed"] == 0
+    assert result["toasts"] == []

@@ -200,3 +200,25 @@ def test_sse_reconnect_waits_until_document_is_visible() -> None:
         """
     )
     assert result == {"retryDelay": 6000, "afterHiddenRetry": 1, "afterVisibleResume": 2}
+
+
+def test_send_blocked_while_attachment_upload_in_flight() -> None:
+    result = run_flow(
+        """
+        const apiCalls = [];
+        const test = harness({
+          hasPendingUploads: () => true,
+          api: async (path) => { apiCalls.push(path); return { events: [], busy: false, queue_len: 0, token: null }; },
+        });
+        test.controller.sendText("hello").then((sent) => process.stdout.write(JSON.stringify({
+          sent,
+          apiCalls,
+          toast: test.state.errors[0],
+          sending: test.options.sessionState.get("sending") === true,
+        })));
+        """
+    )
+    assert result["sent"] is False
+    assert result["apiCalls"] == []
+    assert result["toast"] == "wait for the attachment upload to finish"
+    assert result["sending"] is not True

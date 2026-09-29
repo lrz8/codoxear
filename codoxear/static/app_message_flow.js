@@ -85,6 +85,7 @@ import * as CodoxearTranscript from "./app_transcript.js";
     // Confirmed-send effects. The composer owns input/modal UI only and calls
     // this controller at the send boundary.
     const getStagedAttachments = requireFunction(options.getStagedAttachments, "getStagedAttachments");
+    const hasPendingUploads = typeof options.hasPendingUploads === "function" ? options.hasPendingUploads : () => false;
     const normalizedStagedAttachments = requireFunction(options.normalizedStagedAttachments, "normalizedStagedAttachments");
     const setSelectedSessionPendingAttachment = requireFunction(options.setSelectedSessionPendingAttachment, "setSelectedSessionPendingAttachment");
     const confirmAction = requireFunction(options.confirmAction, "confirmAction");
@@ -586,6 +587,13 @@ import * as CodoxearTranscript from "./app_transcript.js";
         return false;
       }
       const stagedAttachments = getStagedAttachments();
+      if (renderHere && hasPendingUploads()) {
+        // An in-flight upload is not yet a server-side pending attachment, so
+        // neither the local staged list nor the pending flag can see it;
+        // sending now would silently drop the file the user just attached.
+        setToast("wait for the attachment upload to finish");
+        return false;
+      }
       const localAttachmentCount = renderHere ? stagedAttachments.length : normalizedStagedAttachments(sessionInfo && sessionInfo.staged_attachments).length;
       let allowPendingAttachment = localAttachmentCount > 0;
       if (!allowPendingAttachment && sessionInfo && sessionInfo.pending_attachment) {

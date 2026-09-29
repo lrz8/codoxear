@@ -106,6 +106,7 @@ messageFlowController = codoxearMessageFlow.createMessageFlowController(wiring.c
   initPageLimit,
   typingRowRuntime,
   getStagedAttachments: () => attachmentsController.getStagedAttachments(),
+  hasPendingUploads: () => attachmentsController.hasPendingUploads(),
   normalizedStagedAttachments: (list) => attachmentsController.normalizedStagedAttachments(list),
   setSelectedSessionPendingAttachment: (sessionId, value) => attachmentsController.setSelectedSessionPendingAttachment(sessionId, value),
   confirmAction: (options) => confirmApp(options),
