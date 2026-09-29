@@ -515,6 +515,37 @@ class TestQueueSweepOrchestration(unittest.TestCase):
             self.assertEqual(attempts, ["s3"])
             self.assertEqual(sweep_coord.cursor, 3)
 
+    def test_queue_sweep_keeps_snapshot_protected_orphan_queues(self) -> None:
+        # A session whose broker died while the server was down is missing from
+        # the registry but restorable from the snapshot: its queue must survive
+        # the sweep so restore can remap it.
+        with TemporaryDirectory() as td:
+            h = _QueueHarness(Path(td))
+            h.queues["protected-orphan"] = [_queue_item("q1", "still-queued")]
+            h.queues["plain-orphan"] = [_queue_item("q2", "dropped")]
+
+            sweep_coord = self._sweep_coordinator(h, maybe_drain_session_queue=lambda sid: False)
+            sweep_coord.protected_session_ids = lambda: {"protected-orphan"}
+            sweep_coord.sweep()
+
+            self.assertEqual([item["text"] for item in h.queues["protected-orphan"]], ["still-queued"])
+            self.assertNotContains("plain-orphan", h.queues)
+            self.assertEqual(len(h.saves), 1)
+
+    def test_queue_sweep_drops_nothing_when_the_protection_set_is_unknown(self) -> None:
+        # An unreadable snapshot must fail safe: protected_session_ids None
+        # means no queue is dropped this sweep.
+        with TemporaryDirectory() as td:
+            h = _QueueHarness(Path(td))
+            h.queues["plain-orphan"] = [_queue_item("q1", "still-queued")]
+
+            sweep_coord = self._sweep_coordinator(h, maybe_drain_session_queue=lambda sid: False)
+            sweep_coord.protected_session_ids = lambda: None
+            sweep_coord.sweep()
+
+            self.assertEqual([item["text"] for item in h.queues["plain-orphan"]], ["still-queued"])
+            self.assertEqual(h.saves, [])
+
 
 if __name__ == "__main__":
     unittest.main()

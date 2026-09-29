@@ -13,6 +13,7 @@ from .session_snapshot_restore import parse_restore_request
 
 SNAPSHOT_PATH = "/api/sessions/snapshot"
 SNAPSHOT_RESTORE_PATH = "/api/sessions/snapshot/restore"
+SNAPSHOT_ENTRY_PREFIX = SNAPSHOT_PATH + "/"
 
 
 @dataclass(frozen=True)
@@ -22,15 +23,31 @@ class SnapshotRouteDeps:
     read_body: Callable[[Any], bytes]
 
 
-def public_snapshot_entry(entry: SnapshotEntry, *, live: bool) -> dict[str, Any]:
-    return {**entry.to_dict(), "live": bool(live)}
+def public_snapshot_entry(entry: SnapshotEntry, *, annotation: dict[str, Any]) -> dict[str, Any]:
+    """Frozen contract fields plus the coordinator's ``live``/``restoring`` annotation.
+
+    ``live`` is true whenever the entry cannot be restored right now: its
+    transcript is running, or a restore already launched a replacement that
+    has not bound yet. The row counts ``!live`` entries as restorable.
+    """
+    return {**entry.to_dict(), **annotation, "live": bool(annotation.get("live"))}
 
 
-def public_snapshot(state: SnapshotState, *, is_live: Callable[[SnapshotEntry], bool]) -> dict[str, Any]:
+def public_snapshot(state: SnapshotState, *, annotate: Callable[[SnapshotEntry], dict[str, Any]]) -> dict[str, Any]:
     return {
         "saved_at": state.saved_at,
-        "entries": [public_snapshot_entry(entry, live=is_live(entry)) for entry in state.entries.values()],
+        "entries": [public_snapshot_entry(entry, annotation=annotate(entry)) for entry in state.entries.values()],
     }
+
+
+def snapshot_entry_identifier(path: str) -> str | None:
+    """``/api/sessions/snapshot/<id>`` → ``<id>`` (registry session id or thread id), else None."""
+    if not path.startswith(SNAPSHOT_ENTRY_PREFIX) or path == SNAPSHOT_RESTORE_PATH:
+        return None
+    identifier = path[len(SNAPSHOT_ENTRY_PREFIX):]
+    if not identifier or "/" in identifier:
+        return None
+    return identifier
 
 
 def _optional_json_object(raw: bytes) -> dict[str, Any]:
@@ -88,4 +105,19 @@ def handle_snapshot_post_route(handler: Any, *, path: str, manager: Any, deps: S
         deps.json_response(handler, 200, manager.snapshot_restore(request))
     except SnapshotRestoreUnavailable as exc:
         deps.json_response(handler, 409, {"error": str(exc)})
+    return True
+
+
+def handle_snapshot_delete_route(handler: Any, *, path: str, manager: Any, deps: SnapshotRouteDeps) -> bool:
+    identifier = snapshot_entry_identifier(path)
+    if identifier is None:
+        return False
+    if not _authorized(handler, deps):
+        return True
+    try:
+        removed = manager.snapshot_dismiss(identifier)
+    except SnapshotCorrupt as exc:
+        deps.json_response(handler, 409, {"error": f"session snapshot is unreadable: {exc}"})
+        return True
+    deps.json_response(handler, 200, {"removed": bool(removed)})
     return True

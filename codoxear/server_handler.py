@@ -25,6 +25,7 @@ from .queue_routes import handle_queue_get_route
 from .queue_routes import handle_queue_post_route
 from .session_routes import handle_session_get_route
 from .session_routes import handle_session_post_route
+from .session_snapshot_routes import handle_snapshot_delete_route
 from .session_snapshot_routes import handle_snapshot_get_route
 from .session_snapshot_routes import handle_snapshot_post_route
 from .static_routes import handle_static_get_route
@@ -324,6 +325,19 @@ class CodoxearHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
         except KeyError:
             self.deps.json_response(self, 404, {"error": "unknown session"})
+        except Exception as exc:
+            self.deps.handle_route_exception(self, exc)
+
+    def do_DELETE(self) -> None:
+        try:
+            parsed = self._parse_prefixed_request_path()
+            if parsed is None:
+                return
+            _url, path = parsed
+            manager = self.deps.manager()
+            if handle_snapshot_delete_route(self, path=path, manager=manager, deps=self.deps.snapshot_route_deps()):
+                return
+            self.send_error(404)
         except Exception as exc:
             self.deps.handle_route_exception(self, exc)
 

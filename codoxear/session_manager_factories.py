@@ -284,6 +284,7 @@ class SnapshotFactoryDeps:
     read_sidecar_metadata: Any
     snapshot_path: Any
     snapshot_run_settings: Any
+    sock_dir: Any
     stderr: Any
 
 
@@ -510,6 +511,7 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
             read_sidecar_metadata=server._read_sidecar_metadata,
             snapshot_path=server.SESSION_SNAPSHOT_PATH,
             snapshot_run_settings=server._snapshot_run_settings_from_meta,
+            sock_dir=server.SOCK_DIR,
             stderr=server.sys.stderr,
         ),
     )
@@ -702,6 +704,7 @@ def queue_sweep_coordinator_for_manager(manager: Any, deps: QueueSweepFactoryDep
         mark_queue_orphan_recovery_locked=manager._mark_queue_orphan_recovery_locked,
         save_queues=manager._save_queues,
         maybe_drain_session_queue=manager._maybe_drain_session_queue,
+        protected_session_ids=manager._snapshot_queue_protected_session_ids,
         max_drains_per_sweep=deps.queue_sweep_max_drains,
         max_attempts_per_sweep=deps.queue_sweep_max_attempts,
     )
@@ -856,7 +859,7 @@ def lifecycle_coordinator_for_manager(manager: Any, deps: LifecycleFactoryDeps) 
         hide_session=manager._hide_session,
         clean_optional_text=deps.clean_optional_text,
         kill_session_via_pids_fallback=manager._kill_session_via_pids,
-        session_deleted=lambda session_id: manager._snapshot_coordinator_for_manager().session_deleted(session_id),
+        session_deleted=lambda session_id, session: manager._snapshot_coordinator_for_manager().session_deleted(session_id, session),
     )
 
 
@@ -986,15 +989,17 @@ def snapshot_coordinator_for_manager(manager: Any, deps: SnapshotFactoryDeps) ->
         save_queues=manager._save_queues,
         save_drafts=manager._save_drafts,
         save_unattended=manager._save_unattended,
+        save_aliases=manager._save_aliases,
+        save_sidebar_meta=manager._save_sidebar_meta,
         read_sidecar_metadata=lambda meta_path: deps.read_sidecar_metadata(meta_path, sock=meta_path.with_suffix(".sock")),
         snapshot_run_settings=lambda meta, log_path, agent_backend: deps.snapshot_run_settings(
             meta=meta,
             log_path=log_path,
             agent_backend=agent_backend,
         ),
-        live_session_for_resume_target=manager._live_session_for_resume_target,
         pid_alive=deps.pid_alive,
         now=deps.now,
+        sock_dir=deps.sock_dir,
         debounce_seconds=deps.debounce_seconds,
         stderr=deps.stderr,
     )

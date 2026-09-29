@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, MutableMapping
+from typing import Any, Callable, Iterable, MutableMapping
 
 from .session_model import Session
 from .queue_store import QueueStore
@@ -19,6 +19,12 @@ class QueueSweepCoordinator:
     mark_queue_orphan_recovery_locked: Callable[[str], bool]
     save_queues: Callable[[], None]
     maybe_drain_session_queue: Callable[[str], bool]
+    # Registry ids whose queues must survive the session being missing from
+    # the registry: sessions the snapshot can still restore (their broker died
+    # while the server was down, so discovery never registered them). None
+    # means the protection set is unknown (unreadable snapshot) and nothing is
+    # dropped this sweep.
+    protected_session_ids: Callable[[], Iterable[str] | None] = lambda: ()
     max_drains_per_sweep: int = 1
     max_attempts_per_sweep: int | None = None
     cursor: int = 0
@@ -35,7 +41,10 @@ class QueueSweepCoordinator:
                     continue
                 if self.mark_queue_orphan_recovery_locked(str(sid)):
                     marked_recovery = True
-            dropped = self.queue_store.drop_missing_sessions(self.queues(), active_ids)
+            protected = self.protected_session_ids()
+            dropped = False
+            if protected is not None:
+                dropped = self.queue_store.drop_missing_sessions(self.queues(), active_ids | set(protected))
             session_ids = [sid for sid in self.queue_store.nonempty_session_ids(self.queues()) if sid in active_ids]
         if dropped or marked_recovery:
             self.save_queues()

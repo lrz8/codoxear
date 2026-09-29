@@ -19,15 +19,17 @@ def _coordinator(tmp_path: Path, sessions: dict[str, Session], alive: set[int], 
         store=SessionSnapshotStore(snapshot_path(tmp_path), now=lambda: 1.0),
         lock=lock,
         sessions=lambda: sessions,
-        session_store=lambda: SimpleNamespace(queues={}, drafts={}, unattended={}),
+        session_store=lambda: SimpleNamespace(queues={}, drafts={}, unattended={}, aliases={}, sidebar_meta={}),
         save_queues=lambda: None,
         save_drafts=lambda: None,
         save_unattended=lambda: None,
+        save_aliases=lambda: None,
+        save_sidebar_meta=lambda: None,
         read_sidecar_metadata=lambda meta_path: read_metadata(meta_path, sock=meta_path.with_suffix(".sock")),
         snapshot_run_settings=lambda meta, log_path, backend: (meta.get("model_provider"), None, meta.get("model"), meta.get("reasoning_effort")),
-        live_session_for_resume_target=lambda _resume_id, _row: None,
         pid_alive=lambda pid: int(pid) in alive,
         now=lambda: 1.0,
+        sock_dir=tmp_path,
         timer_factory=lambda _delay, fn: SimpleNamespace(start=fn, cancel=lambda: None),
     )
 
@@ -87,7 +89,7 @@ def test_prune_drops_entry_when_broker_unlinked_its_socket_but_keeps_crashed_ses
     sessions.update({clean.session_id: clean, crashed.session_id: crashed})
     alive.update({1, 2})
     coordinator.save_now()
-    assert set(coordinator.read().entries) == {"broker-1", "broker-2"}
+    assert set(coordinator.read().entries) == {("pi", "thread-broker-1"), ("pi", "thread-broker-2")}
 
     # Clean exit: the broker removed its own sock + sidecar.
     clean.sock_path.unlink()
@@ -101,7 +103,7 @@ def test_prune_drops_entry_when_broker_unlinked_its_socket_but_keeps_crashed_ses
 
     _prune(sessions, alive=alive, lock=lock, coordinator=coordinator, sock_call=sock_call).prune_dead_sessions()
 
-    assert set(coordinator.read().entries) == {"broker-2"}
+    assert set(coordinator.read().entries) == {("pi", "thread-broker-2")}
     assert "broker-1" not in sessions
     assert sessions["broker-2"].lost is True
 
@@ -123,7 +125,7 @@ def test_prune_of_a_dead_broker_with_a_surviving_socket_file_keeps_the_entry(tmp
     _prune(sessions, alive=alive, lock=lock, coordinator=coordinator, sock_call=sock_call).prune_dead_sessions()
 
     assert "broker-3" not in sessions
-    assert set(coordinator.read().entries) == {"broker-3"}
+    assert set(coordinator.read().entries) == {("pi", "thread-broker-3")}
 
 
 def test_delete_removes_entry_for_live_and_recovery_rows(tmp_path: Path) -> None:
@@ -136,7 +138,7 @@ def test_delete_removes_entry_for_live_and_recovery_rows(tmp_path: Path) -> None
     alive.add(4)
     coordinator.save_now()
     coordinator.store.upsert([coordinator.entry_for_session(_live_session(tmp_path, "broker-5", broker_pid=5))])
-    assert set(coordinator.read().entries) == {"broker-4", "broker-5"}
+    assert set(coordinator.read().entries) == {("pi", "thread-broker-4"), ("pi", "thread-broker-5")}
 
     lifecycle = SessionLifecycleCoordinator(
         lock=lock,
@@ -157,7 +159,7 @@ def test_delete_removes_entry_for_live_and_recovery_rows(tmp_path: Path) -> None
     )
 
     assert lifecycle.delete_session("broker-4") is True
-    assert set(coordinator.read().entries) == {"broker-5"}
+    assert set(coordinator.read().entries) == {("pi", "thread-broker-5")}
     assert lifecycle.delete_session("broker-5") is True
     assert coordinator.read().entries == {}
     assert lifecycle.delete_session("unknown") is False

@@ -1141,19 +1141,25 @@ class SessionManager:
 
     def snapshot_get(self) -> dict[str, Any]:
         coordinator = self._snapshot_coordinator_for_manager()
-        return _public_snapshot(coordinator.read(), is_live=lambda entry: coordinator.live_session_for_entry(entry) is not None)
+        return _public_snapshot(coordinator.read(), annotate=coordinator.public_annotation)
 
     def snapshot_save(self) -> dict[str, Any]:
         self._discover_existing(force=True)
         coordinator = self._snapshot_coordinator_for_manager()
-        return _public_snapshot(coordinator.save_now(), is_live=lambda entry: coordinator.live_session_for_entry(entry) is not None)
+        return _public_snapshot(coordinator.save_now(), annotate=coordinator.public_annotation)
+
+    def snapshot_dismiss(self, identifier: str) -> bool:
+        return self._snapshot_coordinator_for_manager().dismiss(identifier)
 
     def _snapshot_session_id_for_broker_pid(self, broker_pid: int) -> str | None:
         # A direct spawn returns before discovery has seen the new sidecar;
-        # one forced pass registers it so the remap can happen now instead of
-        # waiting for the pending-remap resolution on a later poll.
+        # one forced pass registers it so the restore response can name the
+        # new registry id and the GET annotation sees the replacement live.
         self._discover_existing(force=True)
         return self._snapshot_coordinator_for_manager().session_id_for_broker_pid(broker_pid)
+
+    def _snapshot_queue_protected_session_ids(self) -> set[str] | None:
+        return self._snapshot_coordinator_for_manager().queue_protected_session_ids()
 
     def snapshot_restore(self, request: SnapshotRestoreRequest) -> dict[str, Any]:
         coordinator = self._snapshot_coordinator_for_manager()
@@ -1161,12 +1167,14 @@ class SessionManager:
             request,
             deps=SnapshotRestoreDeps(
                 read_snapshot=coordinator.read,
-                live_session_for_entry=coordinator.live_session_for_entry,
+                live_session_id_for_entry=coordinator.live_session_id_for_entry,
+                restoring_active=coordinator.restoring_active,
                 parse_launch_request=_parse_new_session_launch_request,
                 spawn_web_session=self.spawn_web_session,
                 tmux_available=_tmux_available,
                 session_id_for_broker_pid=self._snapshot_session_id_for_broker_pid,
-                consume_restored=coordinator.consume_restored,
+                mark_restoring=coordinator.mark_restoring,
+                drop_entry=coordinator.drop_entry,
                 launch_error=SessionLaunchError,
                 lock=coordinator.restore_lock,
             ),

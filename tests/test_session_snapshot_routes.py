@@ -8,9 +8,11 @@ from codoxear.session_snapshot import SnapshotState
 from codoxear.session_snapshot_restore import SnapshotRestoreRequest
 from codoxear.session_snapshot_restore import SnapshotRestoreUnavailable
 from codoxear.session_snapshot_routes import SnapshotRouteDeps
+from codoxear.session_snapshot_routes import handle_snapshot_delete_route
 from codoxear.session_snapshot_routes import handle_snapshot_get_route
 from codoxear.session_snapshot_routes import handle_snapshot_post_route
 from codoxear.session_snapshot_routes import public_snapshot
+from codoxear.session_snapshot_routes import snapshot_entry_identifier
 
 
 class _Handler:
@@ -27,6 +29,8 @@ class _Manager:
         self.calls: list[object] = []
         self.get_error: BaseException | None = None
         self.restore_error: BaseException | None = None
+        self.dismiss_error: BaseException | None = None
+        self.dismissable: set[str] = set()
 
     def snapshot_get(self) -> dict:
         self.calls.append("get")
@@ -42,7 +46,13 @@ class _Manager:
         self.calls.append(request)
         if self.restore_error is not None:
             raise self.restore_error
-        return {"results": [], "restored": 0, "skipped": 0, "failed": 0}
+        return {"results": [], "restored": 0, "skipped": 0, "skipped_restoring": 0, "failed": 0}
+
+    def snapshot_dismiss(self, identifier: str) -> bool:
+        self.calls.append(("dismiss", identifier))
+        if self.dismiss_error is not None:
+            raise self.dismiss_error
+        return identifier in self.dismissable
 
 
 def _deps(*, authed: bool = True):
@@ -113,7 +123,7 @@ def test_restore_accepts_empty_body_and_option_body() -> None:
         SnapshotRestoreRequest(transport="direct", include=("broker-1",)),
     ]
     assert [status for status, _ in responses] == [200, 200]
-    assert responses[0][1] == {"results": [], "restored": 0, "skipped": 0, "failed": 0}
+    assert responses[0][1] == {"results": [], "restored": 0, "skipped": 0, "skipped_restoring": 0, "failed": 0}
 
 
 def test_restore_rejects_bad_bodies_and_reports_unavailable_snapshot() -> None:
@@ -146,13 +156,63 @@ def test_public_snapshot_annotates_live_and_keeps_contract_fields() -> None:
         tmux=True,
         saved_at=3.0,
     )
-    state = SnapshotState(saved_at=4.0, entries={"broker-1": entry}, pending_remaps=[])
+    state = SnapshotState(saved_at=4.0, entries={("pi", "t1"): entry})
 
-    payload = public_snapshot(state, is_live=lambda e: e.session_id == "broker-1")
+    payload = public_snapshot(
+        state,
+        annotate=lambda e: {"live": True, "live_session_id": "broker-9", "restoring": None} if e.session_id == "broker-1" else {"live": False, "live_session_id": None, "restoring": None},
+    )
 
     assert payload["saved_at"] == 4.0
     row = payload["entries"][0]
-    assert {"session_id", "agent_backend", "cwd", "model", "reasoning_effort", "tmux", "live"} <= set(row)
+    assert {"session_id", "thread_id", "agent_backend", "cwd", "model", "reasoning_effort", "tmux", "live"} <= set(row)
     assert row["live"] is True
+    assert row["live_session_id"] == "broker-9"
     assert row["session_id"] == "broker-1"
     assert row["tmux"] is True
+
+
+def test_snapshot_entry_identifier_parses_only_single_entry_paths() -> None:
+    assert snapshot_entry_identifier("/api/sessions/snapshot/broker-1") == "broker-1"
+    assert snapshot_entry_identifier("/api/sessions/snapshot/thread-abc") == "thread-abc"
+    assert snapshot_entry_identifier("/api/sessions/snapshot") is None
+    assert snapshot_entry_identifier("/api/sessions/snapshot/") is None
+    assert snapshot_entry_identifier("/api/sessions/snapshot/restore") is None
+    assert snapshot_entry_identifier("/api/sessions/snapshot/a/b") is None
+    assert snapshot_entry_identifier("/api/sessions/s1/delete") is None
+
+
+def test_delete_dismisses_an_entry_by_registry_id_or_thread_id() -> None:
+    deps, responses = _deps()
+    manager = _Manager()
+    manager.dismissable = {"broker-1"}
+
+    assert handle_snapshot_delete_route(_Handler(), path="/api/sessions/snapshot/broker-1", manager=manager, deps=deps) is True
+    assert responses[-1] == (200, {"removed": True})
+    assert handle_snapshot_delete_route(_Handler(), path="/api/sessions/snapshot/broker-gone", manager=manager, deps=deps) is True
+    assert responses[-1] == (200, {"removed": False})
+    assert manager.calls == [("dismiss", "broker-1"), ("dismiss", "broker-gone")]
+
+
+def test_delete_ignores_non_entry_paths_and_requires_auth() -> None:
+    deps, responses = _deps()
+    manager = _Manager()
+    for path in ("/api/sessions/snapshot", "/api/sessions/snapshot/restore", "/api/sessions/snapshot/", "/api/sessions/s1/files"):
+        assert handle_snapshot_delete_route(_Handler(), path=path, manager=manager, deps=deps) is False
+    assert manager.calls == []
+
+    deps, _responses = _deps(authed=False)
+    handler = _Handler()
+    assert handle_snapshot_delete_route(handler, path="/api/sessions/snapshot/broker-1", manager=manager, deps=deps) is True
+    assert handler.unauthorized is True
+    assert manager.calls == []
+
+
+def test_delete_reports_a_corrupt_snapshot_as_409() -> None:
+    deps, responses = _deps()
+    manager = _Manager()
+    manager.dismiss_error = SnapshotCorrupt("snapshot is not valid JSON")
+
+    assert handle_snapshot_delete_route(_Handler(), path="/api/sessions/snapshot/broker-1", manager=manager, deps=deps) is True
+    assert responses[-1][0] == 409
+    assert "not valid JSON" in responses[-1][1]["error"]

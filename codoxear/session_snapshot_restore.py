@@ -2,19 +2,26 @@
 
 Sequential, per-entry, partially-successful by design. Outcomes:
 
-* ``skipped_live`` — the entry's session (registry id, thread id, or bound
-  log) is currently live; restoring would bind a second session to the same
-  transcript.
-* ``failed`` — the transcript is missing or does not belong to the recorded
-  thread, tmux was requested but is unavailable (no silent fallback to a
-  direct spawn), the recorded settings no longer validate, or the launch
-  itself failed. The entry stays in the snapshot.
-* ``launched`` — the replacement broker started; the entry is consumed and
-  its queue/draft/unattended keys follow the new registry id.
+* ``skipped_restoring`` — a previous restore launched a replacement for this
+  entry and it has not bound its transcript yet (unexpired restoring mark).
+* ``skipped_live`` — the entry's transcript is currently live (same broker
+  incarnation, bound thread, declared resume target, held log, or a live
+  broker in the entry's own sidecar); restoring would bind a second session
+  to the same transcript.
+* ``failed`` — the recorded working directory is gone (never recreated), the
+  transcript log is gone (the entry is dropped: it can never be restored),
+  tmux was requested but is unavailable (no silent fallback to a direct
+  spawn), the recorded settings no longer validate, or the launch itself
+  failed. Any unexpected error is also a per-entry failure: one entry never
+  prevents later entries from being attempted.
+* ``launched`` — the replacement broker started. The entry is *not*
+  consumed: it is stamped ``restoring`` and stays under its old registry id
+  until the replacement's own discovery upsert supersedes it, which is the
+  moment queue/draft/alias/... follow the new registry id.
 
-Re-running is idempotent: consumed entries are gone, live ones are skipped.
-Concurrent calls serialize on one lock so two restores can never both spawn
-the same entry.
+Re-running is idempotent: restoring and live entries are skipped. Concurrent
+calls serialize on one lock so two restores can never both spawn the same
+entry.
 """
 
 from __future__ import annotations
@@ -54,19 +61,21 @@ def parse_restore_request(obj: dict[str, Any] | None) -> SnapshotRestoreRequest:
     elif isinstance(include_raw, list) and all(isinstance(item, str) and item.strip() for item in include_raw):
         include = tuple(item.strip() for item in include_raw)
     else:
-        raise ValueError("include must be a list of non-empty session ids")
+        raise ValueError("include must be a list of non-empty session or thread ids")
     return SnapshotRestoreRequest(transport=transport_raw, include=include)
 
 
 @dataclass(frozen=True)
 class SnapshotRestoreDeps:
     read_snapshot: Callable[[], SnapshotState]
-    live_session_for_entry: Callable[[SnapshotEntry], Any | None]
+    live_session_id_for_entry: Callable[[SnapshotEntry], str | None]
+    restoring_active: Callable[[SnapshotEntry], bool]
     parse_launch_request: Callable[[dict[str, Any]], Any]
     spawn_web_session: Callable[..., dict[str, Any]]
     tmux_available: Callable[[], bool]
     session_id_for_broker_pid: Callable[[int], str | None]
-    consume_restored: Callable[..., None]
+    mark_restoring: Callable[..., bool]
+    drop_entry: Callable[[SnapshotEntry], bool]
     launch_error: type[BaseException]
     lock: threading.Lock
 
@@ -85,17 +94,27 @@ def _launch_request_body(entry: SnapshotEntry, *, create_in_tmux: bool) -> dict[
     }
 
 
+def _row(entry: SnapshotEntry, outcome: str, **extra: Any) -> dict[str, Any]:
+    return {"session_id": entry.session_id, "thread_id": entry.thread_id, "outcome": outcome, **extra}
+
+
 def _failed(entry: SnapshotEntry, error: str) -> dict[str, Any]:
-    return {"session_id": entry.session_id, "outcome": "failed", "error": error}
+    return _row(entry, "failed", error=error)
 
 
 def _restore_entry(entry: SnapshotEntry, *, transport: str, deps: SnapshotRestoreDeps) -> dict[str, Any]:
-    live = deps.live_session_for_entry(entry)
-    if live is not None:
-        return {"session_id": entry.session_id, "outcome": "skipped_live", "live_session_id": getattr(live, "session_id", None)}
+    if deps.restoring_active(entry):
+        return _row(entry, "skipped_restoring")
+    live_id = deps.live_session_id_for_entry(entry)
+    if live_id is not None:
+        return _row(entry, "skipped_live", live_session_id=live_id)
     log_path = Path(entry.log_path).expanduser()
     if not log_path.is_file():
-        return _failed(entry, f"session log missing: {log_path}")
+        deps.drop_entry(entry)
+        return _failed(entry, f"session log missing: {log_path}; entry dropped")
+    cwd = Path(entry.cwd).expanduser()
+    if not cwd.is_dir():
+        return _failed(entry, f"cwd missing: {cwd}")
     create_in_tmux = bool(entry.tmux) and transport == "as_saved"
     if create_in_tmux and not deps.tmux_available():
         return _failed(entry, "tmux unavailable")
@@ -129,9 +148,9 @@ def _restore_entry(entry: SnapshotEntry, *, transport: str, deps: SnapshotRestor
         return _failed(entry, str(exc))
     broker_pid_raw = result.get("broker_pid") if isinstance(result, dict) else None
     broker_pid = int(broker_pid_raw) if isinstance(broker_pid_raw, int) and not isinstance(broker_pid_raw, bool) else None
+    deps.mark_restoring(entry, broker_pid=broker_pid)
     new_session_id = deps.session_id_for_broker_pid(broker_pid) if broker_pid is not None else None
-    deps.consume_restored(entry, broker_pid=broker_pid, new_session_id=new_session_id)
-    out: dict[str, Any] = {"session_id": entry.session_id, "outcome": "launched"}
+    out = _row(entry, "launched")
     if new_session_id is not None:
         out["new_session_id"] = new_session_id
     if broker_pid is not None:
@@ -142,6 +161,13 @@ def _restore_entry(entry: SnapshotEntry, *, transport: str, deps: SnapshotRestor
         if isinstance(result.get("launch_id"), str):
             out["launch_id"] = result["launch_id"]
     return out
+
+
+def _restore_entry_isolated(entry: SnapshotEntry, *, transport: str, deps: SnapshotRestoreDeps) -> dict[str, Any]:
+    try:
+        return _restore_entry(entry, transport=transport, deps=deps)
+    except Exception as exc:  # noqa: BLE001 - one entry's surprise must not abort the batch
+        return _failed(entry, f"unexpected error: {type(exc).__name__}: {exc}")
 
 
 def restore_snapshot(request: SnapshotRestoreRequest, *, deps: SnapshotRestoreDeps) -> dict[str, Any]:
@@ -155,14 +181,15 @@ def restore_snapshot(request: SnapshotRestoreRequest, *, deps: SnapshotRestoreDe
         selected = list(state.entries.values())
         if request.include is not None:
             wanted = set(request.include)
-            selected = [entry for entry in selected if entry.session_id in wanted]
-        results = [_restore_entry(entry, transport=request.transport, deps=deps) for entry in selected]
-    counts = {"launched": 0, "skipped_live": 0, "failed": 0}
+            selected = [entry for entry in selected if entry.session_id in wanted or entry.thread_id in wanted]
+        results = [_restore_entry_isolated(entry, transport=request.transport, deps=deps) for entry in selected]
+    counts = {"launched": 0, "skipped_live": 0, "skipped_restoring": 0, "failed": 0}
     for row in results:
         counts[str(row["outcome"])] += 1
     return {
         "results": results,
         "restored": counts["launched"],
-        "skipped": counts["skipped_live"],
+        "skipped": counts["skipped_live"] + counts["skipped_restoring"],
+        "skipped_restoring": counts["skipped_restoring"],
         "failed": counts["failed"],
     }
