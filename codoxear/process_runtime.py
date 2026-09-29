@@ -6,6 +6,25 @@ import time
 from typing import Callable
 
 
+def _is_zombie(pid: int) -> bool:
+    """True when pid is a zombie: killed but not yet reaped by its parent.
+
+    os.kill(pid, 0) succeeds for zombies, but a zombie can never answer its
+    control socket again — for every codoxear purpose it is dead. Missing
+    /proc (macOS) or an unreadable entry defers to the kill() result.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    try:
+        state = data.rsplit(b")", 1)[1].split()[0]
+    except (IndexError, ValueError):
+        return False
+    return state == b"Z"
+
+
 def pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -18,7 +37,7 @@ def pid_alive(pid: int) -> bool:
         return True
     except Exception:
         return False
-    return True
+    return not _is_zombie(pid)
 
 
 def process_group_alive(root_pid: int) -> bool:
