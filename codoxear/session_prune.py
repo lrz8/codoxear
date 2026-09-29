@@ -31,6 +31,11 @@ class SessionPruneCoordinator:
     unlink_quiet: Callable[[Path], None]
     compute_idle_from_log: Callable[[Path], bool | None] | None = None
     stderr: Any = sys.stderr
+    # Fired for a registered session whose control socket file disappeared.
+    # A broker unlinks its own socket only in its clean teardown; a crash
+    # leaves the file and is handled as a lost tombstone above, so this hook
+    # is the clean-exit signal the session snapshot uses to drop an entry.
+    session_sock_vanished: Callable[[Session], None] = lambda _session: None
 
     def refresh_session_state(self, session_id: str, sock_path: Path, timeout_s: float = 0.4) -> tuple[bool, BaseException | None]:
         try:
@@ -68,6 +73,7 @@ class SessionPruneCoordinator:
             if session.lost:
                 continue
             if not session.sock_path.exists():
+                self.session_sock_vanished(session)
                 dead.append((sid, session.sock_path, session))
                 continue
             ok, err = self.refresh_session_state(sid, session.sock_path, timeout_s=0.4)

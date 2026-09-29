@@ -9,6 +9,7 @@ from typing import Any
 from .agent_backend import get_agent_backend, normalize_agent_backend
 from .launch_path_runtime import load_env_file
 from .server_routing import normalize_url_prefix
+from .session_snapshot import snapshot_path as session_snapshot_path
 from .util import default_app_dir, launch_attempts_path
 
 
@@ -73,6 +74,8 @@ SERVER_CONFIG_EXPORT_NAMES = (
     "QUEUE_IDLE_GRACE_SECONDS",
     "UNATTENDED_MAX_SCAN_BYTES",
     "DISCOVER_MIN_INTERVAL_SECONDS",
+    "SESSION_SNAPSHOT_PATH",
+    "SESSION_SNAPSHOT_DEBOUNCE_SECONDS",
     "METRICS_WINDOW",
     "FILE_HISTORY_MAX",
     "GIT_DIFF_MAX_BYTES",
@@ -153,6 +156,8 @@ class ServerConfig:
     QUEUE_IDLE_GRACE_SECONDS: float
     UNATTENDED_MAX_SCAN_BYTES: int
     DISCOVER_MIN_INTERVAL_SECONDS: float
+    SESSION_SNAPSHOT_PATH: Path
+    SESSION_SNAPSHOT_DEBOUNCE_SECONDS: float
     METRICS_WINDOW: int
     FILE_HISTORY_MAX: int
     GIT_DIFF_MAX_BYTES: int
@@ -313,6 +318,8 @@ def build_server_config(
         QUEUE_IDLE_GRACE_SECONDS=_env_float(env, "CODEX_WEB_QUEUE_IDLE_GRACE_SECONDS", "10.0"),
         UNATTENDED_MAX_SCAN_BYTES=_env_int(env, "CODEX_WEB_UNATTENDED_MAX_SCAN_BYTES", str(8 * 1024 * 1024)),
         DISCOVER_MIN_INTERVAL_SECONDS=_env_float(env, "CODEX_WEB_DISCOVER_MIN_INTERVAL_SECONDS", "1.0"),
+        SESSION_SNAPSHOT_PATH=session_snapshot_path(app_dir),
+        SESSION_SNAPSHOT_DEBOUNCE_SECONDS=2.0,
         METRICS_WINDOW=_env_int(env, "CODEX_WEB_METRICS_WINDOW", "256"),
         FILE_HISTORY_MAX=_env_int(env, "CODEX_WEB_FILE_HISTORY_MAX", "20"),
         GIT_DIFF_MAX_BYTES=_env_int(env, "CODEX_WEB_GIT_DIFF_MAX_BYTES", str(800 * 1024)),

@@ -25,6 +25,10 @@ class SessionLifecycleCoordinator:
     hide_session: Callable[[str], None]
     clean_optional_text: Callable[[Any], str | None] = lambda value: value if isinstance(value, str) and value.strip() else None
     kill_session_via_pids_fallback: Callable[[Session], bool] | None = None
+    # Fired once an explicit delete succeeded (live session killed, or a
+    # non-registry recovery/launch row dismissed); the session snapshot drops
+    # the entry so restore cannot resurrect a session the user removed.
+    session_deleted: Callable[[str], None] = lambda _session_id: None
 
     def live_session_for_resume_target(self, resume_id: str, resume_row: dict[str, Any] | None) -> Session | None:
         sessions = self.sessions()
@@ -94,11 +98,13 @@ class SessionLifecycleCoordinator:
                 has_queue_recovery = self.queue_has_recovery_items_locked(session_id)
             if has_direct_unknown or has_queue_recovery:
                 self.clear_deleted_session_state(session_id, clear_recovery=True)
+                self.session_deleted(session_id)
                 return True
             for record in self.read_launch_attempts():
                 row = self.launch_attempt_row(record)
                 if row is not None and row.get("session_id") == session_id:
                     self.hide_session(session_id)
+                    self.session_deleted(session_id)
                     return True
             return False
 
@@ -111,4 +117,5 @@ class SessionLifecycleCoordinator:
             if launch_id:
                 self.hide_session(launch_id)
             self.clear_deleted_session_state(session_id, clear_recovery=True, cwd=cwd)
+            self.session_deleted(session_id)
         return ok

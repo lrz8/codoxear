@@ -222,6 +222,11 @@ from .util import is_subagent_session_meta as _is_subagent_session_meta
 from .util import iter_session_logs as _iter_session_logs_impl
 from .util import now as _now
 from .sidecar_metadata import log_invalid as _log_invalid_sidecar_metadata
+from .sidecar_metadata import read_metadata as _read_sidecar_metadata
+from .session_snapshot_restore import SnapshotRestoreDeps
+from .session_snapshot_restore import SnapshotRestoreRequest
+from .session_snapshot_restore import restore_snapshot as _restore_snapshot_impl
+from .session_snapshot_routes import public_snapshot as _public_snapshot
 from .util import pid_alive as _pid_alive
 from .util import process_group_alive as _process_group_alive
 from .util import proc_find_open_rollout_log as _proc_find_open_rollout_log
@@ -837,6 +842,28 @@ def _pi_launch_defaults_for_request() -> dict[str, Any]:
     return _launch_defaults_for_request_impl(read_defaults=_read_pi_launch_defaults, fallback_defaults=_fallback_pi_launch_defaults)
 
 
+def _snapshot_run_settings_from_meta(*, meta: dict[str, Any], log_path: Path | None, agent_backend: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """Raw launch settings for the session snapshot.
+
+    Same precedence as the sidebar's ``_session_run_settings_from_meta`` (live
+    bridge values > sidecar launch values > log replay) but without the
+    display normalization: the snapshot stores what the backend reported so
+    ``_parse_new_session_launch_request`` owns request-form validation at
+    restore time.
+    """
+    return _session_run_settings_from_meta_impl(
+        meta=meta,
+        log_path=log_path,
+        agent_backend=agent_backend,
+        clean_optional_text=_clean_optional_text,
+        normalize_requested_preferred_auth_method=_clean_optional_text,
+        display_reasoning_effort=_clean_optional_text,
+        display_pi_reasoning_effort=_clean_optional_text,
+        normalize_requested_cc_reasoning_effort=_clean_optional_text,
+        read_run_settings_from_log=_read_run_settings_from_log,
+    )
+
+
 def _parse_new_session_launch_request(obj: dict[str, Any]) -> NewSessionLaunchRequest:
     return _launch_parse_new_session_launch_request(
         obj,
@@ -1109,6 +1136,42 @@ class SessionManager:
     def _web_launch_coordinator_for_manager(self) -> Any:
         return self._coordinator_graph().web_launch
 
+    def _snapshot_coordinator_for_manager(self) -> Any:
+        return self._coordinator_graph().snapshot
+
+    def snapshot_get(self) -> dict[str, Any]:
+        coordinator = self._snapshot_coordinator_for_manager()
+        return _public_snapshot(coordinator.read(), is_live=lambda entry: coordinator.live_session_for_entry(entry) is not None)
+
+    def snapshot_save(self) -> dict[str, Any]:
+        self._discover_existing(force=True)
+        coordinator = self._snapshot_coordinator_for_manager()
+        return _public_snapshot(coordinator.save_now(), is_live=lambda entry: coordinator.live_session_for_entry(entry) is not None)
+
+    def _snapshot_session_id_for_broker_pid(self, broker_pid: int) -> str | None:
+        # A direct spawn returns before discovery has seen the new sidecar;
+        # one forced pass registers it so the remap can happen now instead of
+        # waiting for the pending-remap resolution on a later poll.
+        self._discover_existing(force=True)
+        return self._snapshot_coordinator_for_manager().session_id_for_broker_pid(broker_pid)
+
+    def snapshot_restore(self, request: SnapshotRestoreRequest) -> dict[str, Any]:
+        coordinator = self._snapshot_coordinator_for_manager()
+        return _restore_snapshot_impl(
+            request,
+            deps=SnapshotRestoreDeps(
+                read_snapshot=coordinator.read,
+                live_session_for_entry=coordinator.live_session_for_entry,
+                parse_launch_request=_parse_new_session_launch_request,
+                spawn_web_session=self.spawn_web_session,
+                tmux_available=_tmux_available,
+                session_id_for_broker_pid=self._snapshot_session_id_for_broker_pid,
+                consume_restored=coordinator.consume_restored,
+                launch_error=SessionLaunchError,
+                lock=coordinator.restore_lock,
+            ),
+        )
+
     def _hide_session(self, session_id: str) -> None:
         return self._ui_state_coordinator_for_manager().hide_session(session_id)
 
@@ -1241,7 +1304,8 @@ class SessionManager:
         return self._queue_sweep_coordinator_for_manager().sweep()
 
     def _apply_discovery_result(self, result: DiscoveryResult) -> None:
-        return self._discovery_registry_for_manager().apply_result(result)
+        self._discovery_registry_for_manager().apply_result(result)
+        self._snapshot_coordinator_for_manager().observe_registrations(result.registrations)
 
 
 

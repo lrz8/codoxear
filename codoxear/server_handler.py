@@ -25,6 +25,8 @@ from .queue_routes import handle_queue_get_route
 from .queue_routes import handle_queue_post_route
 from .session_routes import handle_session_get_route
 from .session_routes import handle_session_post_route
+from .session_snapshot_routes import handle_snapshot_get_route
+from .session_snapshot_routes import handle_snapshot_post_route
 from .static_routes import handle_static_get_route
 from .voice_routes import handle_voice_get_route
 from .voice_routes import handle_voice_post_route
@@ -46,6 +48,7 @@ class ServerHandlerDeps:
     auth_route_deps: Callable[[], Any]
     voice_route_deps: Callable[[], Any]
     session_route_deps: Callable[[], Any]
+    snapshot_route_deps: Callable[[], Any]
     diagnostics_route_deps: Callable[[], Any]
     queue_route_deps: Callable[[], Any]
     draft_route_deps: Callable[[], Any]
@@ -163,6 +166,8 @@ class CodoxearHandler(http.server.BaseHTTPRequestHandler):
                 return
             if self._handle_voice_get(path, url.query):
                 return
+            if handle_snapshot_get_route(self, path=path, manager=manager, deps=self.deps.snapshot_route_deps()):
+                return
             if handle_session_get_route(
                 self,
                 path=path,
@@ -258,6 +263,8 @@ class CodoxearHandler(http.server.BaseHTTPRequestHandler):
                 return
             if self._handle_voice_post(path):
                 return
+            if handle_snapshot_post_route(self, path=path, manager=manager, deps=self.deps.snapshot_route_deps()):
+                return
             if handle_session_post_route(
                 self,
                 path=path,
@@ -351,6 +358,7 @@ def make_server_handler(server: Any) -> type[CodoxearHandler]:
             auth_route_deps=lambda: server._route_deps_factory().auth_route_deps(),
             voice_route_deps=lambda: server._route_deps_factory().voice_route_deps(),
             session_route_deps=lambda: server._route_deps_factory().session_route_deps(),
+            snapshot_route_deps=lambda: server._route_deps_factory().snapshot_route_deps(),
             diagnostics_route_deps=lambda: server._route_deps_factory().diagnostics_route_deps(),
             queue_route_deps=lambda: server._route_deps_factory().queue_route_deps(),
             draft_route_deps=lambda: server._route_deps_factory().draft_route_deps(),

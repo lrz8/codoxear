@@ -19,6 +19,7 @@ from .hook_routes import HookRouteDeps
 from .message_routes import MessageRouteDeps
 from .queue_routes import QueueRouteDeps
 from .session_routes import SessionRouteDeps
+from .session_snapshot_routes import SnapshotRouteDeps
 from .static_routes import StaticRouteDeps
 from .token_signal import TokenObservation
 from .voice_routes import VoiceRouteDeps
@@ -170,6 +171,14 @@ class ServerRouteDepsFactory:
             parse_new_session_launch_request=server._parse_new_session_launch_request,
             launch_request_validation_error=server.LaunchRequestValidationError,
             session_launch_error=server.SessionLaunchError,
+        )
+
+    def snapshot_route_deps(self) -> SnapshotRouteDeps:
+        server = self.server
+        return SnapshotRouteDeps(
+            require_auth=server._require_auth,
+            json_response=server._json_response,
+            read_body=server._read_body,
         )
 
     def voice_route_deps(self) -> VoiceRouteDeps:

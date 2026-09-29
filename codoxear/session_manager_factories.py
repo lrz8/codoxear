@@ -24,6 +24,8 @@ from .session_registry import session_registry_for_manager
 from .session_runtime import ListingRuntimeProbes
 from .session_send import PrelogUserMessageRecorder
 from .session_send import SessionSendCoordinator
+from .session_snapshot import SessionSnapshotStore
+from .session_snapshot_runtime import SessionSnapshotCoordinator
 from .session_ui_state import SessionUiStateCoordinator
 from .session_unattended_config import SessionUnattendedConfigCoordinator
 from .session_web_launch import SessionWebLaunchCoordinator
@@ -275,6 +277,17 @@ class WebLaunchFactoryDeps:
 
 
 @dataclass(frozen=True)
+class SnapshotFactoryDeps:
+    debounce_seconds: float
+    now: Any
+    pid_alive: Any
+    read_sidecar_metadata: Any
+    snapshot_path: Any
+    snapshot_run_settings: Any
+    stderr: Any
+
+
+@dataclass(frozen=True)
 class SessionManagerCoordinatorDeps:
     discovery_deps: DiscoveryFactoryDeps
     queue_coordinator: QueueFactoryDeps
@@ -299,6 +312,7 @@ class SessionManagerCoordinatorDeps:
     send_coordinator: SendFactoryDeps
     prelog_user_message_recorder: PrelogRecorderFactoryDeps
     web_launch_coordinator: WebLaunchFactoryDeps
+    snapshot_coordinator: SnapshotFactoryDeps
 
 
 def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDeps:
@@ -488,6 +502,15 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
             wait_for_spawned_broker_meta=server._wait_for_spawned_broker_meta,
             wait_or_raise=server._wait_or_raise,
             which_tmux=server.shutil.which,
+        ),
+        snapshot_coordinator=SnapshotFactoryDeps(
+            debounce_seconds=server.SESSION_SNAPSHOT_DEBOUNCE_SECONDS,
+            now=server.time.time,
+            pid_alive=server._pid_alive,
+            read_sidecar_metadata=server._read_sidecar_metadata,
+            snapshot_path=server.SESSION_SNAPSHOT_PATH,
+            snapshot_run_settings=server._snapshot_run_settings_from_meta,
+            stderr=server.sys.stderr,
         ),
     )
 
@@ -833,6 +856,7 @@ def lifecycle_coordinator_for_manager(manager: Any, deps: LifecycleFactoryDeps) 
         hide_session=manager._hide_session,
         clean_optional_text=deps.clean_optional_text,
         kill_session_via_pids_fallback=manager._kill_session_via_pids,
+        session_deleted=lambda session_id: manager._snapshot_coordinator_for_manager().session_deleted(session_id),
     )
 
 
@@ -874,6 +898,7 @@ def prune_coordinator_for_manager(manager: Any, deps: PruneFactoryDeps) -> Any:
         unlink_quiet=deps.unlink_quiet,
         compute_idle_from_log=deps.compute_idle_from_log,
         stderr=deps.stderr,
+        session_sock_vanished=lambda session: manager._snapshot_coordinator_for_manager().session_sock_vanished(session),
     )
 
 
@@ -952,6 +977,29 @@ def web_launch_coordinator_for_manager(manager: Any, deps: WebLaunchFactoryDeps)
     )
 
 
+def snapshot_coordinator_for_manager(manager: Any, deps: SnapshotFactoryDeps) -> Any:
+    return SessionSnapshotCoordinator(
+        store=SessionSnapshotStore(deps.snapshot_path, now=deps.now),
+        lock=_registry_lock(manager),
+        sessions=lambda: _registry_sessions(manager),
+        session_store=manager._session_store_for_manager,
+        save_queues=manager._save_queues,
+        save_drafts=manager._save_drafts,
+        save_unattended=manager._save_unattended,
+        read_sidecar_metadata=lambda meta_path: deps.read_sidecar_metadata(meta_path, sock=meta_path.with_suffix(".sock")),
+        snapshot_run_settings=lambda meta, log_path, agent_backend: deps.snapshot_run_settings(
+            meta=meta,
+            log_path=log_path,
+            agent_backend=agent_backend,
+        ),
+        live_session_for_resume_target=manager._live_session_for_resume_target,
+        pid_alive=deps.pid_alive,
+        now=deps.now,
+        debounce_seconds=deps.debounce_seconds,
+        stderr=deps.stderr,
+    )
+
+
 @dataclass(frozen=True)
 class SessionManagerCoordinatorGraph:
     discovery: DiscoveryDeps
@@ -978,6 +1026,7 @@ class SessionManagerCoordinatorGraph:
     send: SessionSendCoordinator
     prelog_recorder: PrelogUserMessageRecorder
     web_launch: SessionWebLaunchCoordinator
+    snapshot: SessionSnapshotCoordinator
 
 
 def build_session_manager_coordinator_graph(
@@ -1010,4 +1059,5 @@ def build_session_manager_coordinator_graph(
         send=send_coordinator_for_manager(manager, deps.send_coordinator),
         prelog_recorder=prelog_user_message_recorder_for_manager(manager, deps.prelog_user_message_recorder),
         web_launch=web_launch_coordinator_for_manager(manager, deps.web_launch_coordinator),
+        snapshot=snapshot_coordinator_for_manager(manager, deps.snapshot_coordinator),
     )
