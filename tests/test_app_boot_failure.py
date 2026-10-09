@@ -1,99 +1,83 @@
-from __future__ import annotations
-
+"""Execute the ESM boot against login, worker readiness, and DOM seams."""
 import json
 import subprocess
-import textwrap
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-APP_JS = ROOT / "codoxear" / "static" / "app.js"
+STATIC = Path(__file__).resolve().parents[1] / "codoxear/static"
 
 
-def test_post_login_render_failure_replaces_live_root_and_logs_error() -> None:
-    app_source = APP_JS.read_text(encoding="utf-8")
-    app_source = app_source.replace(
-        'import { createApplicationController, resolveAppUrl } from "./app_application.js";\n',
-        """
-        const resolveAppUrl = path => path;
-        const createApplicationController = () => ({
-          api: async () => { throw { status: 401 }; },
-          renderApp: () => { throw new ReferenceError("missing render dependency"); },
-          renderLogin: (onAuthed) => {
-            const login = document.createElement("form");
-            login.setAttribute("id", "loginForm");
-            document.getElementById("root").appendChild(login);
-            onAuthed();
-          },
+def test_post_login_refresh_orders_readiness_auth_and_render_and_reports_failures() -> None:
+    program = "const BOOT = " + json.dumps((STATIC / "app.js").read_text()) + ";\n"
+    program += r"""
+      const vm = require('node:vm'), assert = require('node:assert/strict');
+      class Element {
+        constructor(tag) { this.tag = tag; this.attributes = {}; this.children = []; this.style = {}; }
+        setAttribute(name, value) { this.attributes[name] = value; }
+        appendChild(child) { this.children.push(child); }
+        replaceChildren(...children) { this.children = children; }
+      }
+      async function scenario(mode) {
+        const calls = [], errors = [], root = new Element('main');
+        root.appendChild(new Element('form'));
+        let callback, resolveReady, rejectReady, timeout;
+        const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+        const navigator = mode === 'absent' ? {} : { serviceWorker: { ready } };
+        const ctx = vm.createContext({
+          navigator, calls,
+          window: { setTimeout(fn) { timeout = fn; return 1; }, clearTimeout() {} },
+          document: { getElementById: () => root, body: root, createElement: tag => new Element(tag) },
+          console: { error: (...args) => errors.push(args), warn() {} },
+          saveCallback: fn => { callback = fn; },
+          authError: mode === 'auth-failure', renderError: mode === 'render-failure',
         });
-        """,
-    ).replace(
-        "  (async function boot() {",
-        "  globalThis.bootPromise = (async function boot() {",
-    ).replace(
-        'import * as CodoxearSW from "./app_sw.js";\n',
-        'const CodoxearSW = { ensureAppServiceWorker: async () => null };\n',
-    )
-    program = textwrap.dedent(
-        f"""
-        const vm = require("vm");
-        class Element {{
-          constructor(tagName) {{
-            this.tagName = tagName;
-            this.attributes = {{}};
-            this.children = [];
-            this.style = {{}};
-            this.textContent = "";
-          }}
-          setAttribute(name, value) {{ this.attributes[name] = String(value); }}
-          appendChild(child) {{ this.children.push(child); return child; }}
-          replaceChildren(...children) {{ this.children = children; this.textContent = ""; }}
-          set innerHTML(value) {{ this.children = []; this.textContent = String(value || ""); }}
-          get innerHTML() {{ return this.textContent; }}
-        }}
-        const root = new Element("main");
-        root.setAttribute("id", "root");
-        const body = new Element("body");
-        body.appendChild(root);
-        const errors = [];
-        const context = {{
-          window: {{}},
-          document: {{
-            body,
-            createElement: (tagName) => new Element(tagName),
-            getElementById: (id) => id === "root" ? root : null,
-          }},
-          console: {{ error: (...args) => errors.push(args) }},
-          Promise,
-        }};
-        context.globalThis = context;
-        vm.createContext(context);
-        vm.runInContext({json.dumps(app_source)}, context);
-        context.bootPromise.then(() => {{
+        const application = new vm.SourceTextModule(`
+          function createApplicationController() {
+            let count = 0;
+            return {
+              api: async path => {
+                calls.push(['auth', path]);
+                if (++count === 1) throw {status: 401};
+                if (authError) throw new Error('auth refresh failed');
+                return {ok: true};
+              },
+              renderApp: () => { calls.push(['render']); if (renderError) throw new ReferenceError('missing render dependency'); },
+              renderLogin: fn => { calls.push(['login']); saveCallback(fn); },
+            };
+          }
+          const resolveAppUrl = path => path;
+          export {createApplicationController, resolveAppUrl};
+        `, {context: ctx});
+        const sw = new vm.SourceTextModule('export const ensureAppServiceWorker = async () => null;', {context: ctx});
+        const boot = new vm.SourceTextModule(BOOT, {context: ctx});
+        await boot.link(specifier => specifier === './app_sw.js' ? sw : application);
+        await boot.evaluate();
+        await new Promise(setImmediate);
+        assert.equal(typeof callback, 'function');
+        const login = callback();
+        if (mode !== 'absent') {
+          assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['auth', '/api/me'], ['login']], 'auth refresh must await readiness');
+          if (mode === 'ready-failure') rejectReady(new Error('worker unavailable'));
+          else if (mode === 'timeout') timeout();
+          else resolveReady({active: true});
+        }
+        await login;
+        const expected = [['auth', '/api/me'], ['login'], ['auth', '/api/me']];
+        if (mode !== 'auth-failure') expected.push(['render']);
+        assert.deepEqual(JSON.parse(JSON.stringify(calls)), expected);
+        if (mode === 'auth-failure' || mode === 'render-failure') {
+          const message = mode === 'auth-failure' ? 'auth refresh failed' : 'missing render dependency';
+          assert.equal(errors.length, 1);
+          assert.equal(errors[0][0], 'application bootstrap failed after login');
+          assert.equal(errors[0][1].message, message);
+          assert.equal(root.children.length, 1);
           const panel = root.children[0];
-          process.stdout.write(JSON.stringify({{
-            errors: errors.map((args) => args.map((value) => value && value.message ? value.message : String(value))),
-            panel: panel && {{
-              marker: panel.attributes["data-codoxear-boot-error"],
-              role: panel.attributes.role,
-              text: panel.textContent,
-            }},
-          }}));
-        }});
-        """
-    )
-
-    result = subprocess.run(
-        ["node", "-e", program],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    observed = json.loads(result.stdout)
-
-    assert observed["errors"] == [["application bootstrap failed after login", "missing render dependency"]]
-    assert observed["panel"] == {
-        "marker": "true",
-        "role": "alert",
-        "text": "Codoxear failed to start\n\nmissing render dependency\n\nReload to retry.",
-    }
+          assert.equal(panel.attributes['data-codoxear-boot-error'], 'true');
+          assert.equal(panel.attributes.role, 'alert');
+          assert.equal(panel.textContent, `Codoxear failed to start\n\n${message}\n\nReload to retry.`);
+        } else assert.equal(errors.length, 0);
+      }
+      (async () => {
+        for (const mode of ['ready', 'ready-failure', 'absent', 'timeout', 'auth-failure', 'render-failure']) await scenario(mode);
+      })().catch(e => { console.error(e); process.exit(1); });
+    """
+    subprocess.run(["node", "--experimental-vm-modules", "-e", program], check=True, capture_output=True, text=True)

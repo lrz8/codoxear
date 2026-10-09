@@ -42,8 +42,24 @@ import * as CodoxearSW from "./app_sw.js";
       renderApp();
     } catch (error) {
       if (error && error.status === 401) {
-        renderLogin(() => {
+        renderLogin(async () => {
           try {
+            const worker = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
+            if (worker && worker.ready) {
+              // Registration can fail or be disabled; login must still settle.
+              let timer;
+              try {
+                await Promise.race([
+                  worker.ready,
+                  new Promise((resolve) => { timer = window.setTimeout(resolve, 2000); }),
+                ]);
+              } catch (workerError) {
+                console.warn("service worker readiness failed after login", workerError);
+              } finally {
+                window.clearTimeout(timer);
+              }
+            }
+            await api("/api/me");
             renderApp();
           } catch (bootstrapError) {
             showPostLoginBootstrapFailure(bootstrapError);
