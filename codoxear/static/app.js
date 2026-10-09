@@ -1,4 +1,4 @@
-import { createApplicationController } from "./app_application.js";
+import { createApplicationController, resolveAppUrl } from "./app_application.js";
 import * as CodoxearSW from "./app_sw.js";
 
 /* Boot is deliberately small: application composition lives in app_application.js. */
@@ -36,7 +36,7 @@ import * as CodoxearSW from "./app_sw.js";
   }
 
   (async function boot() {
-    void CodoxearSW.ensureAppServiceWorker().catch((error) => console.warn("service worker registration failed", error));
+    void CodoxearSW.ensureAppServiceWorker(resolveAppUrl).catch((error) => console.warn("service worker registration failed", error));
     try {
       await api("/api/me");
       renderApp();

@@ -51,12 +51,14 @@ async function versionedStatic(request) {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  const scopePath = new URL(self.registration.scope).pathname;
+  if (request.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith(scopePath)) return;
+  const pathname = `/${url.pathname.slice(scopePath.length)}`;
   // This is the SSE stream, not the JSON /messages/live polling route.
-  if (/^\/api\/sessions\/[^/]+\/live$/.test(url.pathname)) return;
+  if (/^\/api\/sessions\/[^/]+\/live$/.test(pathname)) return;
   if (request.mode === "navigate") {
     event.respondWith(networkFirst(request, HTML_CACHE, { ignoreSearch: true }));
-  } else if (url.pathname.startsWith("/api/")) {
+  } else if (pathname.startsWith("/api/")) {
     event.respondWith(networkFirst(request, API_CACHE));
   } else if (url.searchParams.has("v")) {
     event.respondWith(versionedStatic(request));

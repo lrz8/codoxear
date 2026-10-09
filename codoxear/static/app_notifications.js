@@ -43,6 +43,7 @@ function createNotificationRuntime(options = {}) {
   const api = requireFunction(options.api, "api");
   const setToast = requireFunction(options.setToast, "setToast");
   const handleAppAuthLoss = requireFunction(options.handleAppAuthLoss, "handleAppAuthLoss");
+  const resolveAppUrl = requireFunction(options.resolveAppUrl, "resolveAppUrl");
   const storageGetItem = requireFunction(options.storageGetItem, "storageGetItem");
   const storageSetItem = requireFunction(options.storageSetItem, "storageSetItem");
   const storageRemoveItem = requireFunction(options.storageRemoveItem, "storageRemoveItem");
@@ -252,7 +253,7 @@ function createNotificationRuntime(options = {}) {
       throw new Error("push notifications are not supported in this browser");
     }
     if (!swRegistration) {
-      swRegistration = await CodoxearSW.ensureAppServiceWorker(navigatorTarget);
+      swRegistration = await CodoxearSW.ensureAppServiceWorker(resolveAppUrl, navigatorTarget);
     }
     return swRegistration;
   }

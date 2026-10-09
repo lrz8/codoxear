@@ -740,6 +740,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           api,
           setToast,
           handleAppAuthLoss,
+          resolveAppUrl,
           storageGetItem,
           storageSetItem,
           storageRemoveItem,
