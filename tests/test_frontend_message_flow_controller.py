@@ -1,6 +1,7 @@
 from frontend_module_loader import module_path
 import json
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -73,7 +74,10 @@ def run_flow(body: str) -> dict:
         {body}
         """
     )
-    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".js", encoding="utf-8") as script_file:
+        script_file.write(script)
+        script_file.flush()
+        completed = subprocess.run(["node", script_file.name], check=True, capture_output=True, text=True)
     return json.loads(completed.stdout)
 
 

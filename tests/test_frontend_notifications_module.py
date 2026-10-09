@@ -178,6 +178,7 @@ def run_mobile_toggle_endpoint_harness() -> dict:
         const storage = new Map();
         const apiCalls = [];
         const toasts = [];
+        const registrations = [];
         const byId = new Map();
         function node(tag = "div") {{
           return {{
@@ -225,7 +226,7 @@ def run_mobile_toggle_endpoint_harness() -> dict:
         }};
         const navigatorTarget = {{
           userAgent: "iPhone",
-          serviceWorker: {{ register: async () => registration }},
+          serviceWorker: {{ register: async (url, options) => {{ registrations.push([url, options]); return registration; }} }},
         }};
         const windowTarget = {{ isSecureContext: true, PushManager: function PushManager() {{}} }};
         const voiceHost = node("host");
@@ -279,6 +280,7 @@ def run_mobile_toggle_endpoint_harness() -> dict:
           process.stdout.write(JSON.stringify({{
             afterEnable,
             afterDisable,
+            registrations,
             toasts,
             posts: apiCalls.filter((call) => call[1] === "POST"),
           }}));
@@ -292,6 +294,7 @@ def run_mobile_toggle_endpoint_harness() -> dict:
 def test_bell_toggle_posts_push_subscription_and_toggle_endpoints() -> None:
     result = run_mobile_toggle_endpoint_harness()
 
+    assert result["registrations"] == [["/service-worker.js", {"scope": "/"}]]
     posts = result["posts"]
     assert len(posts) == 2
     subscribe_url, subscribe_method, subscribe_body = posts[0]

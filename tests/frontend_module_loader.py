@@ -85,6 +85,7 @@ MODULE_NAMESPACES = {
     "app_shell.js": ["CodoxearShell"],
     "app_sse.js": ["CodoxearSse"],
     "app_storage.js": ["CodoxearStorage"],
+    "app_sw.js": ["CodoxearSW"],
     "app_transcript.js": ["CodoxearMessageIdentity", "CodoxearPendingUser", "CodoxearTranscript"],
     "app_transcript_render.js": ["CodoxearNavigationPulse", "CodoxearTranscriptRender"],
     "app_transcript_view.js": ["CodoxearTranscriptView"],
@@ -158,6 +159,13 @@ def module_path(module_name: str) -> Path:
     output = _CACHE / module_name
     source = source_path.read_text(encoding="utf-8")
     transformed = strip_esm(source, module_name)
+    # These leaf helpers load without constructing controllers.
+    # Load their actual implementations for existing standalone VM fixtures
+    # whose controller modules now import them, just as ESM does in the app.
+    for dependency, namespace in (("app_network.js", "CodoxearNetwork"), ("app_sw.js", "CodoxearSW")):
+        if re.search(rf'^import\s+\*\s+as\s+{namespace}\s+from', source, re.MULTILINE):
+            helper = strip_esm((STATIC / dependency).read_text(encoding="utf-8"), dependency)
+            transformed = f"if (!window.{namespace}) {{\n{helper}\n}}\n" + transformed
     if not output.is_file() or output.read_text(encoding="utf-8") != transformed:
         output.write_text(transformed, encoding="utf-8")
     return output

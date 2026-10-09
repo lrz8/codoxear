@@ -13,8 +13,9 @@ APP_JS = ROOT / "codoxear" / "static" / "app.js"
 def test_post_login_render_failure_replaces_live_root_and_logs_error() -> None:
     app_source = APP_JS.read_text(encoding="utf-8")
     app_source = app_source.replace(
-        'import { createApplicationController } from "./app_application.js";\n',
+        'import { createApplicationController, resolveAppUrl } from "./app_application.js";\n',
         """
+        const resolveAppUrl = path => path;
         const createApplicationController = () => ({
           api: async () => { throw { status: 401 }; },
           renderApp: () => { throw new ReferenceError("missing render dependency"); },
@@ -29,6 +30,9 @@ def test_post_login_render_failure_replaces_live_root_and_logs_error() -> None:
     ).replace(
         "  (async function boot() {",
         "  globalThis.bootPromise = (async function boot() {",
+    ).replace(
+        'import * as CodoxearSW from "./app_sw.js";\n',
+        'const CodoxearSW = { ensureAppServiceWorker: async () => null };\n',
     )
     program = textwrap.dedent(
         f"""

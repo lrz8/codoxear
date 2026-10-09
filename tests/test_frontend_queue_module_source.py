@@ -36,6 +36,7 @@ let confirmValue = false;
 const confirmCalls = [];
 const sessions = new Map();
 let selected = null;
+let composerText = '';
 let sessionState = null;
 
 let apiResponseQueue = [];
@@ -118,6 +119,8 @@ const deps = {
 
   sessionCatalog: { get: (field) => field === "sessionIndex" ? sessions : null, subscribe: () => () => {} },
   isAppDisposed: () => disposed,
+  getComposerText: () => composerText,
+  clearComposerInput: () => { composerText = ''; },
   api: (url, options = {}) => {
     const body = options && options.body ? JSON.parse(JSON.stringify(options.body)) : null;
     calls.push(["api", url, body]);
@@ -153,6 +156,7 @@ const ctx = {
   HTMLElement: function HTMLElement() {},
   document: { activeElement: null, querySelector: () => null },
   window: {},
+  navigator: { onLine: true },
   console,
 };
 vm.createContext(ctx);
@@ -208,6 +212,9 @@ globalThis.__harness = {
   sessions,
   select: (sid) => { selected = sid; sessionState.set("selected", sid); },
   setDisposed: (v) => { disposed = v; },
+  setOffline: (v) => { ctx.navigator.onLine = !v; },
+  setComposerText: (v) => { composerText = v; },
+  getComposerText: () => composerText,
   setNow: (v) => { nowValue = v; },
   setApiResponses,
   runPendingTimers,
