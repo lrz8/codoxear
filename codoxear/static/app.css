@@ -2091,6 +2091,23 @@
         text-align: left;
         cursor: pointer;
       }
+      .composer .modelPicker .modelPickerProvider {
+        padding: var(--space-2) var(--space-3);
+        color: var(--muted);
+        font-size: var(--font-sm);
+        font-family: var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+      .composer .modelPicker .pathPickerOption {
+        font-family: var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+      .composer .modelPicker .fileMenuMatch {
+        padding: 0 1px;
+        border-radius: var(--radius-control);
+        color: inherit;
+        background: var(--surface-highlight);
+      }
       .composer .modelPickerOption:hover,
       .composer .modelPickerOption.active {
         background: var(--wash);

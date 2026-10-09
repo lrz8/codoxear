@@ -1,3 +1,5 @@
+import * as CodoxearPathCompletion from "./app_path_completion.js";
+import * as CodoxearFileHelpers from "./app_file_helpers.js";
 
   function requireFunction(value, name) {
     if (typeof value !== "function") throw new TypeError(`composer controller dependency missing: ${name}`);
@@ -68,6 +70,7 @@
     let modelPickerKind = null;
     let modelPickerOptions = [];
     let modelPickerFocus = -1;
+    const pathCompletion = CodoxearPathCompletion.createPathCompletionRuntime({ api, onChange: renderPathPicker });
 
     const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     const CC_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max", "auto"];
@@ -290,6 +293,8 @@
     }
 
     function hideModelPicker() {
+      pathCompletion.close();
+      modelPickerOptions = [];
       modelPickerOpen = false;
       modelPickerKind = null;
       modelPickerFocus = -1;
@@ -366,7 +371,76 @@
       }
     }
 
+    function selectPath(entry) {
+      const span = pathCompletion.snapshot();
+      if (!entry || !span.open || span.sessionId !== sessionState.get("selected")) return;
+      textarea.value = textarea.value.slice(0, span.start) + entry.completion + textarea.value.slice(span.end);
+      const caret = span.start + entry.completion.length;
+      textarea.setSelectionRange(caret, caret);
+      saveSessionDraft(sessionState.get("selected"));
+      onDraftEdited(textarea.value);
+      autoGrow();
+      modelPickerFocus = -1;
+      if (entry.is_dir) syncModelPicker();
+      else hideModelPicker();
+      textarea.focus();
+    }
+
+    function renderPathPicker(state) {
+      if (!modelPicker || !state.open || state.sessionId !== sessionState.get("selected")) return;
+      modelPickerKind = "path";
+      modelPickerOptions = state.entries;
+      modelPickerFocus = Math.min(Math.max(modelPickerFocus, 0), state.entries.length - 1);
+      modelPicker.innerHTML = "";
+      modelPicker.setAttribute("role", "listbox");
+      modelPicker.setAttribute("aria-label", "Available paths");
+      if (state.dir) {
+        const label = document.createElement("div");
+        label.className = "modelPickerProvider";
+        label.textContent = state.dir;
+        modelPicker.appendChild(label);
+      }
+      const fragment = state.token.slice(state.token.lastIndexOf("/") + 1);
+      state.entries.forEach((entry, index) => {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.tabIndex = -1;
+        option.className = "modelPickerOption";
+        option.setAttribute("role", "option");
+        option.className += " pathPickerOption";
+        option.id = `path-picker-option-${index}`;
+        const name = entry.name + (entry.is_dir ? "/" : "");
+        let offset = 0;
+        for (const [start, end] of CodoxearFileHelpers.filePickerMatchRangesForQuery(entry.name, fragment)) {
+          option.appendChild(document.createTextNode(name.slice(offset, start)));
+          const mark = document.createElement("mark");
+          mark.className = "fileMenuMatch";
+          mark.textContent = name.slice(start, end);
+          option.appendChild(mark);
+          offset = end;
+        }
+        option.appendChild(document.createTextNode(name.slice(offset)));
+        option.onpointerdown = (event) => event.preventDefault();
+        option.onclick = () => selectPath(entry);
+        modelPicker.appendChild(option);
+      });
+      if (!state.entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "pickerEmpty";
+        empty.textContent = state.loading ? "…" : "No matches";
+        modelPicker.appendChild(empty);
+      }
+      modelPicker.style.display = "block";
+      modelPickerOpen = true;
+      textarea.setAttribute("role", "combobox");
+      textarea.setAttribute("aria-autocomplete", "list");
+      textarea.setAttribute("aria-controls", modelPicker.id || "modelPicker");
+      textarea.setAttribute("aria-expanded", "true");
+      syncModelPickerSelection();
+    }
+
     function selectPickerOption(option) {
+      if (modelPickerKind === "path") { selectPath(option); return; }
       if (modelPickerKind === "command") { selectSlashCommand(option); return; }
       const choice = typeof option === "object" && option !== null ? String(option.model || "").trim() : String(option || "").trim();
       const session = selectedSession();
@@ -386,7 +460,7 @@
 
     function syncModelPickerSelection({ scroll = false } = {}) {
       if (!modelPicker) return;
-      const options = Array.from(modelPicker.children || []);
+      const options = Array.from(modelPicker.children || []).filter((option) => String(option.className || "").split(/\s+/).includes("modelPickerOption"));
       options.forEach((option, index) => {
         const active = index === modelPickerFocus;
         option.classList.toggle("active", active);
@@ -467,6 +541,11 @@
     }
 
     function syncModelPicker() {
+      if (modelPicker) {
+        const path = pathCompletion.sync(String(textarea.value || ""), textarea.selectionStart || 0, sessionState.get("selected"));
+        if (path) { renderPathPicker(path); return; }
+        if (modelPickerKind === "path") hideModelPicker();
+      }
       const commands = slashCommandMatches();
       if (commands) {
         modelPickerKind = "command";
@@ -534,6 +613,7 @@
     }
 
     function loadSessionDraft(sessionId) {
+      hideModelPicker();
       textarea.value = sessionId ? storageGetItem(sessionDraftKey(sessionId)) || "" : "";
       autoGrow();
     }
@@ -543,6 +623,7 @@
     // event, so this never triggers a re-upload.
     function setDraftFromServer(sessionId, text) {
       if (!sessionId) return;
+      hideModelPicker();
       textarea.value = String(text || "");
       saveSessionDraft(sessionId);
       autoGrow();
@@ -558,6 +639,7 @@
     }
 
     function clearComposer({ blur = true } = {}) {
+      hideModelPicker();
       textarea.value = "";
       clearSessionDraft(sessionState.get("selected"));
       autoGrow();
@@ -611,6 +693,11 @@
       modelPickerFocus = -1;
       syncModelPicker();
     });
+    listen(textarea, "click", syncModelPicker);
+    listen(textarea, "keyup", (event) => {
+      // Acceptance and dismissal must survive their corresponding keyup.
+      if (!event.isComposing && !["Enter", "Tab", "Escape"].includes(event.key)) syncModelPicker();
+    });
     listen(textarea, "keydown", (event) => {
       if (event.key === "Escape") {
         if (isModalOpen()) return;
@@ -628,11 +715,11 @@
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           const delta = event.key === "ArrowDown" ? 1 : -1;
-          modelPickerFocus = (modelPickerFocus + delta + modelPickerOptions.length) % modelPickerOptions.length;
+          if (modelPickerOptions.length) modelPickerFocus = (modelPickerFocus + delta + modelPickerOptions.length) % modelPickerOptions.length;
           syncModelPickerSelection({ scroll: true });
           return;
         }
-        if (event.key === "Enter" && !event.isComposing) {
+        if ((event.key === "Enter" || (event.key === "Tab" && modelPickerKind === "path")) && !event.isComposing) {
           event.preventDefault();
           selectPickerOption(modelPickerOptions[modelPickerFocus >= 0 ? modelPickerFocus : 0]);
           return;
@@ -689,7 +776,7 @@
     sendChoiceBackdrop.onclick = () => hideSendChoice({ restoreFocus: true });
 
     const unsubscribeSessionState = [
-      sessionState.subscribe("selected", syncSendButtonState),
+      sessionState.subscribe("selected", () => { hideModelPicker(); syncSendButtonState(); }),
       sessionState.subscribe("sending", syncSendButtonState),
       sessionCatalog.subscribe("sessionIndex", syncSendButtonState),
     ];
@@ -715,7 +802,7 @@
         sendChoiceLaterBtn.onclick = null;
         sendChoiceCancelBtn.onclick = null;
         sendChoiceBackdrop.onclick = null;
-        if (modelPicker) hideModelPicker();
+        hideModelPicker();
         while (cleanups.length) cleanups.pop()();
         while (unsubscribeSessionState.length) unsubscribeSessionState.pop()();
       },
