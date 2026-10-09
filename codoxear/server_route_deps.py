@@ -207,6 +207,7 @@ class ServerRouteDepsFactory:
             read_regular_file_prefix=server._read_regular_file_prefix_no_symlink,
             read_image_dimensions=server._read_image_dimensions,
             search_session_relative_files=server._search_session_relative_files,
+            complete_session_path=server._complete_session_path,
             list_session_relative_files=server._list_session_relative_files,
             list_session_relative_file_entries=server._list_session_relative_file_entries,
             file_kind=server._file_kind,

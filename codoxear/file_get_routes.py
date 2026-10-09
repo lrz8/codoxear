@@ -11,6 +11,8 @@ from .git_ops import path_has_surrogate_bytes
 from .git_ops import path_json_text
 from .git_ops import path_token_query
 from .git_ops import path_token_response_fields
+from .file_complete import FileCompletionResult
+from .file_complete import complete_session_path
 from .image_dimensions import read_image_dimensions
 from .file_view import ClientFileView
 from .video_preview import video_response_payload
@@ -116,6 +118,7 @@ class FileGetRouteDeps:
     send_attachment_file_response: Callable[..., None]
     file_search_limit: int
     read_image_dimensions: Callable[[Path], tuple[int, int]] = read_image_dimensions
+    complete_session_path: Callable[..., FileCompletionResult] = complete_session_path
 
 
 def handle_file_get_route(
@@ -135,6 +138,11 @@ def handle_file_get_route(
     session_id = match_session_route(path, "file", "search")
     if session_id is not None:
         _handle_session_file_search(handler, session_id=session_id, query=query, manager=manager, deps=deps)
+        return True
+
+    session_id = match_session_route(path, "file", "complete")
+    if session_id is not None:
+        _handle_session_file_complete(handler, session_id=session_id, query=query, manager=manager, deps=deps)
         return True
 
     session_id = match_session_route(path, "file", "list")
@@ -340,6 +348,45 @@ def _handle_session_file_search(handler: Any, *, session_id: str, query: str, ma
             "matches": result["matches"],
             "scanned": result["scanned"],
             "truncated": result["truncated"],
+        },
+    )
+
+
+def _handle_session_file_complete(handler: Any, *, session_id: str, query: str, manager: Any, deps: FileGetRouteDeps) -> None:
+    session = _session(handler, session_id=session_id, manager=manager, deps=deps)
+    if session is None:
+        return
+    values = urllib.parse.parse_qs(query, keep_blank_values=True)
+    path_values = values.get("path")
+    token = path_values[0] if path_values else ""
+    if not token or "/" not in token:
+        deps.json_response(handler, 400, {"error": "path must be a non-empty slash-containing token"})
+        return
+    limit_values = values.get("limit")
+    if limit_values is None:
+        limit = 50
+    else:
+        try:
+            limit = int(limit_values[0])
+        except (TypeError, ValueError):
+            deps.json_response(handler, 400, {"error": "limit must be an integer"})
+            return
+    limit = max(1, min(limit, 120))
+    try:
+        base = deps.resolve_session_cwd(session.cwd)
+    except (OSError, ValueError):
+        deps.json_response(handler, 200, {"ok": True, "dir": path_json_text(session.cwd), "entries": [], "truncated": False})
+        return
+    result = deps.complete_session_path(base, token=token, limit=limit)
+    directory = result.directory if result.directory is not None else base
+    deps.json_response(
+        handler,
+        200,
+        {
+            "ok": True,
+            "dir": path_json_text(directory),
+            "entries": result.entries,
+            "truncated": result.truncated,
         },
     )
 

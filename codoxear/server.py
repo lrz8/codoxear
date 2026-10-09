@@ -37,6 +37,7 @@ from . import rollout_log as _rollout_log
 from .control_socket import ControlSocketCallError
 from .control_socket import call_control_socket as _call_control_socket_impl
 from .file_response import send_attachment_file_response as _send_attachment_file_response
+from .file_complete import complete_session_path as _complete_session_path_impl
 from .file_lock_runtime import file_write_lock as _file_write_lock_impl
 from .file_response import send_inline_file_response as _send_inline_file_response_impl
 from .file_response import single_byte_range as _single_byte_range
@@ -583,6 +584,10 @@ def _git_repo_root(cwd: Path) -> Path | None:
 
 def _search_session_relative_files(base: Path, *, query: str, limit: int = FILE_SEARCH_LIMIT) -> dict[str, Any]:
     return _search_session_relative_files_impl(base, query=query, limit=limit, git_root_func=_git_repo_root)
+
+
+def _complete_session_path(base: Path, *, token: str, limit: int):
+    return _complete_session_path_impl(base, token=token, limit=limit)
 
 
 def _describe_session_cwd(cwd: Path) -> dict[str, Any]:
