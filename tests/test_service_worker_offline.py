@@ -39,12 +39,25 @@ const clients = {
   async openWindow(url) { clientCalls.push(url); },
 };
 const self = {
+  navigator: { onLine: true },
   location: { origin },
   registration: { scope: origin + '/', async showNotification(title, options) { notifications.push({ title, options }); } },
   async skipWaiting() { skips++; },
   addEventListener(type, listener) { listeners[type] = listener; },
 };
-const ctx = { self, clients, caches, URL, Request, Response, console: { warn: (...args) => warnings.push(args) }, fetch: async request => { fetches.push(request.url); return network(request); } };
+let clock = 0, timerId = 0;
+const timers = new Map();
+function setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: clock + delay }); return id; }
+function clearTimeout(id) { timers.delete(id); }
+async function flush() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
+async function advance(ms) {
+  clock += ms;
+  for (const [id, timer] of [...timers]) {
+    if (timer.at <= clock) { timers.delete(id); timer.fn(); }
+  }
+  await flush();
+}
+const ctx = { self, clients, caches, URL, Request, Response, setTimeout, clearTimeout, console: { warn: (...args) => warnings.push(args) }, fetch: async request => { fetches.push(request.url); return network(request); } };
 vm.createContext(ctx);
 vm.runInContext(WORKER_SOURCE, ctx);
 function dispatch(type, extra = {}) {
@@ -345,4 +358,107 @@ def test_activation_warmup_skips_non_200_and_isolates_asset_failures() -> None:
       assert.ok(await cached('codoxear-static-v1', '/app.css?v=new'));
       assert.ok(await cached('codoxear-static-v1', '/themes/clay.css?v=new'));
       assert.equal(warnings.length, 1);
+    """)
+
+
+def test_network_first_hanging_fetch_times_out_but_late_success_refreshes_cache() -> None:
+    run_worker("""
+      for (const [path, options, name] of [
+        ['/?warm=1', {mode: 'navigate'}, 'codoxear-html-v1'],
+        ['/api/me', {}, 'codoxear-api-v1'],
+      ]) {
+        network = async () => new Response('cached');
+        await get(path, options);
+        let resolveFetch, delivered = false;
+        network = () => new Promise(resolve => { resolveFetch = resolve; });
+        const target = options.mode === 'navigate' ? '/?hang=1' : path;
+        const event = dispatch('fetch', {request: request(target, options)});
+        event.response.then(() => { delivered = true; });
+        await flush();
+        const before = fetches.length;
+        await advance(2999);
+        assert.equal(delivered, false, 'hanging network must remain pending before timeout');
+        await advance(1);
+        assert.equal(await (await event.response).text(), 'cached');
+        assert.equal(delivered, true);
+        assert.equal(fetches.length, before, 'timeout must not retry or abort the fetch');
+        let backgroundFinished = false;
+        event.finish().then(() => { backgroundFinished = true; });
+        await flush();
+        assert.equal(backgroundFinished, false, 'waitUntil retains late cache refresh');
+        if (options.mode === 'navigate') {
+          const marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-offline-navigation')).json();
+          assert.equal(marker.url, origin + target);
+          assert.equal(marker.offline, true);
+        }
+        resolveFetch(new Response('late success'));
+        await event.finish();
+        assert.equal(await (await cached(name, target)).text(), 'late success');
+        assert.equal(timers.size, 0);
+      }
+    """)
+
+
+def test_network_first_offline_fast_path_skips_fetch_but_misses_try_network() -> None:
+    run_worker("""
+      for (const [path, options, name] of [
+        ['/?warm=1', {mode: 'navigate'}, 'codoxear-html-v1'],
+        ['/api/sessions?cached=1', {}, 'codoxear-api-v1'],
+      ]) {
+        self.navigator.onLine = true;
+        network = async () => new Response('cached');
+        await get(path, options);
+        self.navigator.onLine = false;
+        const before = fetches.length;
+        network = () => { throw new Error('fast path must not fetch'); };
+        const target = options.mode === 'navigate' ? '/?offline=1' : path;
+        assert.equal(await (await get(target, options)).text(), 'cached');
+        assert.equal(fetches.length, before);
+        assert.equal(timers.size, 0);
+        network = async () => new Response('network despite offline hint');
+        const miss = options.mode === 'navigate' ? '/uncached' : '/api/sessions?uncached=1';
+        assert.equal(await (await get(miss, options)).text(), 'network despite offline hint');
+        assert.equal(fetches.length, before + 1);
+        assert.equal(await (await cached(name, miss)).text(), 'network despite offline hint');
+        assert.equal(timers.size, 0);
+      }
+    """)
+
+
+def test_network_first_quick_success_clears_timeout_and_missing_navigator_works() -> None:
+    run_worker("""
+      delete self.navigator;
+      for (const [path, options, name] of [
+        ['/', {mode: 'navigate'}, 'codoxear-html-v1'],
+        ['/api/me', {}, 'codoxear-api-v1'],
+      ]) {
+        network = async () => new Response('stale');
+        await get(path, options);
+        network = async () => new Response('fresh');
+        assert.equal(await (await get(path, options)).text(), 'fresh');
+        assert.equal(await (await cached(name, path)).text(), 'fresh');
+        assert.equal(timers.size, 0);
+        await advance(3000);
+        assert.equal(await (await cached(name, path)).text(), 'fresh');
+      }
+    """)
+
+
+def test_network_first_uncached_timeout_rejects_but_late_fetch_can_warm_cache() -> None:
+    run_worker("""
+      for (const [path, options, name] of [
+        ['/uncached', {mode: 'navigate'}, 'codoxear-html-v1'],
+        ['/api/uncached', {}, 'codoxear-api-v1'],
+      ]) {
+        let resolveFetch;
+        network = () => new Promise(resolve => { resolveFetch = resolve; });
+        const event = dispatch('fetch', {request: request(path, options)});
+        const rejected = assert.rejects(event.response, /timed out/);
+        await flush();
+        await advance(3000);
+        await rejected;
+        resolveFetch(new Response('late'));
+        await event.finish();
+        assert.equal(await (await cached(name, path)).text(), 'late');
+      }
     """)

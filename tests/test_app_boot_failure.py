@@ -81,3 +81,68 @@ def test_post_login_refresh_orders_readiness_auth_and_render_and_reports_failure
       })().catch(e => { console.error(e); process.exit(1); });
     """
     subprocess.run(["node", "--experimental-vm-modules", "-e", program], check=True, capture_output=True, text=True)
+
+
+def test_inline_boot_watchdog_allows_slow_offline_boot_and_still_reports_failure() -> None:
+    from html.parser import HTMLParser
+
+    class Scripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.scripts = []
+            self.current = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'script':
+                self.current = []
+
+        def handle_data(self, data):
+            if self.current is not None:
+                self.current.append(data)
+
+        def handle_endtag(self, tag):
+            if tag == 'script' and self.current is not None:
+                self.scripts.append(''.join(self.current))
+                self.current = None
+
+    parser = Scripts()
+    parser.feed((STATIC / 'index.html').read_text())
+    # Third head script owns bootstrap failure reporting (after theme + globals).
+    program = 'const SCRIPT = ' + json.dumps(parser.scripts[2]) + ';\n' + r"""
+      const vm = require('node:vm'), assert = require('node:assert/strict');
+      function scenario(succeeds) {
+        const listeners = {}, timers = [], root = {
+          childNodes: [], textContent: '', appendChild(el) { this.childNodes.push(el); },
+        };
+        const window = {
+          addEventListener(name, fn) { listeners[name] = fn; },
+          setTimeout(fn, delay) { timers.push({fn, delay}); },
+        };
+        const document = {
+          getElementById() { return root; }, body: root,
+          createElement() { return {
+            style: {}, attributes: {}, children: [],
+            setAttribute(name, value) { this.attributes[name] = value; },
+            appendChild(el) { this.children.push(el); },
+          }; },
+        };
+        vm.runInNewContext(SCRIPT, {window, document, Date});
+        listeners.load();
+        assert.equal(timers[0].delay, 100);
+        timers.shift().fn();
+        assert.equal(timers[0].delay, 12000, 'offline API timeouts must fit before watchdog');
+        if (succeeds) {
+          // Slow boot constructs a usable shell after the old 5s deadline.
+          root.childNodes.push({textContent: 'session list'});
+          window.__codoxearMarkBootstrapped();
+        }
+        timers.shift().fn();
+        assert.equal(root.childNodes.length, 1);
+        if (!succeeds) {
+          assert.equal(root.childNodes[0].attributes['data-codoxear-load-error'], 'true');
+          assert.equal(root.childNodes[0].children[0].textContent, 'Codoxear failed to load');
+        } else assert.equal(root.childNodes[0].textContent, 'session list');
+      }
+      scenario(true); scenario(false);
+    """
+    subprocess.run(['node', '-e', program], check=True, capture_output=True, text=True)

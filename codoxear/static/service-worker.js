@@ -3,6 +3,7 @@ const STATIC_CACHE = "codoxear-static-v1";
 const API_CACHE = "codoxear-api-v1";
 const SW_META_CACHE = "codoxear-sw-meta-v1";
 const APP_CACHES = new Set([HTML_CACHE, STATIC_CACHE, API_CACHE, SW_META_CACHE]);
+const NETWORK_FIRST_TIMEOUT_MS = 3000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -77,14 +78,35 @@ async function fetchAndCache(request, cache, { pruneVersions = false } = {}) {
   return response;
 }
 
-async function networkFirst(request, cacheName, matchOptions) {
+async function networkFirst(event, cacheName, matchOptions, onFallback) {
+  const request = event.request;
   const cache = await caches.open(cacheName);
+  if (self.navigator && self.navigator.onLine === false) {
+    const cached = await cache.match(request, matchOptions);
+    if (cached) {
+      onFallback?.();
+      return cached;
+    }
+  }
+  // Airplane + VPN tails and captive portals can hang instead of rejecting.
+  // Bound response delivery, but retain the fetch so late success refreshes cache.
+  const network = fetchAndCache(request, cache);
+  event.waitUntil(network.catch(() => {}));
+  let timer;
   try {
-    return await fetchAndCache(request, cache);
+    return await Promise.race([
+      network,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("Network-first request timed out")), NETWORK_FIRST_TIMEOUT_MS);
+      }),
+    ]);
   } catch (error) {
+    onFallback?.();
     const cached = await cache.match(request, matchOptions);
     if (cached) return cached;
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -118,18 +140,10 @@ function startNavigationMarker(event, request) {
   return finish;
 }
 
-async function navigationNetworkFirst(request, finishMarker) {
+async function navigationNetworkFirst(event, finishMarker) {
   let offline = false;
   try {
-    const cache = await caches.open(HTML_CACHE);
-    try {
-      return await fetchAndCache(request, cache);
-    } catch (error) {
-      offline = true;
-      const cached = await cache.match(request, { ignoreSearch: true });
-      if (cached) return cached;
-      throw error;
-    }
+    return await networkFirst(event, HTML_CACHE, { ignoreSearch: true }, () => { offline = true; });
   } finally {
     // Diagnostics must never alter navigation delivery, including a failed fallback.
     finishMarker(offline);
@@ -146,9 +160,9 @@ self.addEventListener("fetch", (event) => {
   if (/^\/api\/sessions\/[^/]+\/live$/.test(pathname)) return;
   if (request.mode === "navigate") {
     const finishMarker = startNavigationMarker(event, request);
-    event.respondWith(navigationNetworkFirst(request, finishMarker));
+    event.respondWith(navigationNetworkFirst(event, finishMarker));
   } else if (pathname.startsWith("/api/")) {
-    event.respondWith(networkFirst(request, API_CACHE));
+    event.respondWith(networkFirst(event, API_CACHE));
   } else if (url.searchParams.has("v")) {
     event.respondWith(versionedStatic(request));
   } else {
