@@ -8,12 +8,57 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil((async () => {
-    const names = await caches.keys();
-    await Promise.all(names.filter((name) => name.startsWith("codoxear-") && !APP_CACHES.has(name)).map((name) => caches.delete(name)));
-    await clients.claim();
-  })());
+  const claim = clients.claim();
+  const prune = caches.keys().then((names) => Promise.all(
+    names.filter((name) => name.startsWith("codoxear-") && !APP_CACHES.has(name)).map((name) => caches.delete(name))
+  ));
+  event.waitUntil(Promise.all([claim, prune, warmActivationCaches().catch(warnWarmupFailure)]));
 });
+
+function warnWarmupFailure(error) {
+  console.warn("Codoxear offline cache warm-up failed", error);
+}
+
+async function warmUrl(url, cacheName) {
+  const cache = await caches.open(cacheName);
+  return fetchAndCache(new Request(url, { credentials: "same-origin" }), cache, {
+    pruneVersions: cacheName === STATIC_CACHE,
+  });
+}
+
+async function warmShell() {
+  const shellUrl = new URL("./", self.registration.scope);
+  const response = await warmUrl(shellUrl.href, HTML_CACHE);
+  if (response.status !== 200) return;
+  const html = (await response.text()).replace(/&amp;/g, "&");
+  const assets = new Set();
+  const attributes = /\b(?:src|href)\s*=\s*(["'])([^"'<>]*[?&]v=[^"'<>]*)\1/gi;
+  for (const match of html.matchAll(attributes)) {
+    const url = new URL(match[2], self.registration.scope);
+    if (url.origin === self.location.origin && url.searchParams.has("v")) assets.add(url.href);
+  }
+  // The theme link is built by document.write, not a literal HTML attribute.
+  // All shell assets share the server's memoized asset version.
+  const firstAsset = assets.values().next().value;
+  if (firstAsset) {
+    const version = new URL(firstAsset).searchParams.get("v");
+    for (const family of ["paper", "clay", "slate"]) {
+      const url = new URL(`themes/${family}.css`, self.registration.scope);
+      url.searchParams.set("v", version);
+      assets.add(url.href);
+    }
+  }
+  await Promise.all([...assets].map((url) => warmUrl(url, STATIC_CACHE).catch(warnWarmupFailure)));
+}
+
+async function warmActivationCaches() {
+  await Promise.all([
+    warmShell().catch(warnWarmupFailure),
+    ...["api/me", "api/sessions"].map((path) =>
+      warmUrl(new URL(path, self.registration.scope).href, API_CACHE).catch(warnWarmupFailure)
+    ),
+  ]);
+}
 
 async function fetchAndCache(request, cache, { pruneVersions = false } = {}) {
   const response = await fetch(request);
