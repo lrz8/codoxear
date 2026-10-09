@@ -1,4 +1,5 @@
 import * as CodoxearPolling from "./app_polling.js";
+import * as CodoxearNetwork from "./app_network.js";
 import * as CodoxearTranscript from "./app_transcript.js";
 
 
@@ -577,6 +578,10 @@ import * as CodoxearTranscript from "./app_transcript.js";
     async function sendText(raw, { sid = null } = {}) {
       const sessionId = sid || sessionState.get("selected");
       if (!sessionId || !raw || !raw.trim() || sessionState.get("sending")) return false;
+      if (CodoxearNetwork.browserOffline(navigatorValue())) {
+        setToast("Offline — reconnect to send.");
+        return false;
+      }
       const renderHere = sessionId === sessionState.get("selected");
       const renewsTranscript = isTranscriptRenewalCommand(raw, sessionId);
       const sessionInfo = getSessionInfo(sessionId) || null;

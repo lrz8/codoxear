@@ -1,4 +1,5 @@
 import * as CodoxearModal from "./app_modal.js";
+import * as CodoxearNetwork from "./app_network.js";
 import * as CodoxearSessionHelpers from "./app_session_helpers.js";
 
 
@@ -195,6 +196,10 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
       const sessionId = sid || selected;
       const text = String(raw || "");
       if (!sessionId || !text.trim()) return false;
+      if (CodoxearNetwork.browserOffline(typeof navigator === "undefined" ? undefined : navigator)) {
+        setToast("Offline — reconnect to queue.");
+        return false;
+      }
       const sessionInfo = getSessionInfo(sessionId) || null;
       if (sessionInfo && sessionLaunchFailed(sessionInfo)) {
         setToast("failed launch cannot receive queued messages");
