@@ -71,9 +71,6 @@ const diagCloseBtn = fakeNode();
 const diagBtn = fakeNode();
 const diagCopyConversationBtn = fakeNode();
 const diagCopyBtn = fakeNode();
-const navigatorTarget = {};
-const cachesTarget = {};
-
 const deps = {
   diagBackdrop, diagViewer, diagContent, diagStatus, diagCloseBtn, diagBtn, diagCopyConversationBtn, diagCopyBtn,
   sessionState: { get: () => selected, subscribe: () => () => {} },
@@ -107,8 +104,6 @@ const deps = {
   afterModalVisibilityChanged: () => { calls.push(["afterModalVisibilityChanged"]); },
   el: makeEl,
   uiVersion: "test-ver",
-  navigatorTarget,
-  cachesTarget,
   requestFrame: (fn) => { calls.push(["raf"]); fn(); },
 };
 
@@ -147,8 +142,6 @@ globalThis.__harness = {
   setConversationCopyError: (e) => { conversationCopyError = e; },
   labelValues,
   sectionTitles: () => diagContent._children.filter((row) => row._class === "detailsSection").map((row) => row.textContent),
-  navigatorTarget,
-  cachesTarget,
 };
 """
 
@@ -404,11 +397,12 @@ class TestFrontendDiagnosticsModuleBehavior(unittest.TestCase):
             await h.controller.onCopyClick({});
             const copyCall = h.calls.filter((c) => c[0] === "copyToClipboard").pop();
             const copyDisabled = h.dom.diagCopyBtn.disabled;
-            globalThis.__result = { apiCalls, rows, copyText: copyCall && copyCall[1], copyDisabled };
+            globalThis.__result = { apiCalls, rows, sections: h.sectionTitles(), copyText: copyCall && copyCall[1], copyDisabled };
             """
         )
         result = run_node_json(js)
         self.assertEqual(result["apiCalls"], ["/api/sessions/sid-1/diagnostics"])
+        self.assertEqual(result["sections"], [])
         rows = result["rows"]
         for label in ["Session", "Thread", "Owned", "Busy", "Queue", "CWD", "Started", "Updated", "Broker PID", "Agent", "Agent PID", "Pi bridge marker", "Pi bridge PID", "Pi bridge caps", "Log", "tmux", "Branch", "Provider", "Model", "Reasoning", "Service tier", "Priority", "Priority offset", "Snooze", "Depends on", "UI", "Context"]:
             self.assertContains(label, rows, label)
@@ -420,154 +414,12 @@ class TestFrontendDiagnosticsModuleBehavior(unittest.TestCase):
         self.assertEqual(rows["Pi bridge caps"], "thinking; 2 commands")
         self.assertEqual(rows["UI"], "test-ver")
         self.assertContains("Context", rows)
+        self.assertNotIn("Offline / PWA", rows)
+        self.assertNotIn("SW API supported", rows)
         # Copy text includes the Session row via diagnosticsCopyText semantics.
         self.assertContains("Session=sid-1", result["copyText"])
         self.assertContains("Provider=PROV:chatgpt", result["copyText"])
         self.assertFalse(result["copyDisabled"])
-
-    def test_offline_pwa_rows_report_full_service_worker_and_cache_state(self) -> None:
-        js = harness_script(
-            """
-            const h = globalThis.__harness;
-            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
-            h.select("sid-1");
-            h.navigatorTarget.onLine = true;
-            h.navigatorTarget.serviceWorker = {
-              controller: { scriptURL: "https://phone.example/service-worker.js" },
-              getRegistration: async () => ({
-                scope: "https://phone.example/",
-                active: { state: "activated", scriptURL: "https://phone.example/service-worker.js" },
-              }),
-            };
-            h.cachesTarget.keys = async () => ["codoxear-html-v1", "third-party", "codoxear-api-v1"];
-            h.cachesTarget.open = async (name) => ({
-              keys: async () => Array(name === "codoxear-html-v1" ? 2 : 5).fill({}),
-            });
-            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
-            await h.controller.show({ opener: null });
-            const rows = {};
-            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
-            globalThis.__result = { rows, sections: h.sectionTitles() };
-            """
-        )
-        result = run_node_json(js)
-        rows = result["rows"]
-        self.assertEqual(result["sections"], ["Offline / PWA"])
-        self.assertEqual(rows["SW API supported"], "yes")
-        self.assertEqual(rows["Page controlled"], "https://phone.example/service-worker.js")
-        self.assertEqual(
-            rows["Registration"],
-            "scope: https://phone.example/\nactive state: activated\nactive script: https://phone.example/service-worker.js",
-        )
-        self.assertEqual(rows["Caches"], "codoxear-html-v1: 2 entries\ncodoxear-api-v1: 5 entries")
-        self.assertEqual(rows["navigator.onLine"], "true")
-
-    def test_offline_pwa_rows_render_navigation_markers_and_offline_marker_absence(self) -> None:
-        js = harness_script(
-            """
-            const h = globalThis.__harness;
-            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
-            h.select("sid-1");
-            h.navigatorTarget.serviceWorker = {
-              controller: { scriptURL: "https://phone.example/codoxear/service-worker.js" },
-              getRegistration: async () => ({
-                scope: "https://phone.example/codoxear/",
-                active: { state: "activated", scriptURL: "https://phone.example/codoxear/service-worker.js" },
-              }),
-            };
-            const markers = new Map([
-              ["last-navigation", { ts: Date.UTC(2026, 9, 9, 15, 2, 11), offline: false, url: "https://phone.example/codoxear/" }],
-              ["last-offline-navigation", { ts: Date.UTC(2026, 9, 9, 14, 52, 11), offline: true, url: "https://phone.example/codoxear/" }],
-            ]);
-            const markerKeys = [];
-            h.cachesTarget.keys = async () => ["codoxear-html-v1", "codoxear-sw-meta-v1"];
-            h.cachesTarget.open = async (name) => name === "codoxear-sw-meta-v1"
-              ? { keys: async () => [{}], match: async (key) => {
-                const href = key.href || key.url;
-                markerKeys.push(href);
-                const marker = markers.get(new URL(href).pathname.split("/").pop());
-                return marker ? { json: async () => marker } : undefined;
-              } }
-              : { keys: async () => [{}] };
-            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
-            await h.controller.show({ opener: null });
-            let rows = {};
-            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
-            const network = rows["Last SW navigation"];
-            const fallback = rows["Last offline SW navigation"];
-
-            markers.delete("last-offline-navigation");
-            await h.controller.show({ opener: null });
-            rows = {};
-            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
-            globalThis.__result = { network, fallback, absent: rows["Last offline SW navigation"], markerKeys };
-            """
-        )
-        result = run_node_json(js)
-        self.assertEqual(result["network"], "2026-10-09 15:02:11 (network)")
-        self.assertEqual(result["fallback"], "2026-10-09 14:52:11 (cache fallback)")
-        self.assertEqual(result["absent"], "none")
-        self.assertEqual(result["markerKeys"], [
-            "https://phone.example/codoxear/sw-meta/last-navigation",
-            "https://phone.example/codoxear/sw-meta/last-offline-navigation",
-            "https://phone.example/codoxear/sw-meta/last-navigation",
-            "https://phone.example/codoxear/sw-meta/last-offline-navigation",
-        ])
-
-    def test_offline_pwa_rows_explicitly_report_missing_apis_without_breaking_dialog(self) -> None:
-        js = harness_script(
-            """
-            const h = globalThis.__harness;
-            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
-            h.select("sid-1");
-            h.navigatorTarget.onLine = false;
-            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
-            await h.controller.show({ opener: null });
-            const rows = {};
-            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
-            globalThis.__result = {
-              rows,
-              sections: h.sectionTitles(),
-              backdrop: h.dom.diagBackdrop.style.display,
-              viewer: h.dom.diagViewer.style.display,
-              status: h.dom.diagStatus.textContent,
-            };
-            """
-        )
-        result = run_node_json(js)
-        self.assertEqual(result["sections"], ["Offline / PWA"])
-        self.assertEqual(result["rows"]["SW API supported"], "no")
-        self.assertEqual(result["rows"]["Page controlled"], "unavailable")
-        self.assertEqual(result["rows"]["Registration"], "unavailable")
-        self.assertEqual(result["rows"]["Caches"], "unavailable")
-        self.assertEqual(result["rows"]["navigator.onLine"], "false")
-        self.assertEqual(result["backdrop"], "block")
-        self.assertEqual(result["viewer"], "flex")
-        self.assertEqual(result["status"], "")
-
-    def test_offline_pwa_registration_rejection_is_unavailable_without_throwing(self) -> None:
-        js = harness_script(
-            """
-            const h = globalThis.__harness;
-            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
-            h.select("sid-1");
-            h.navigatorTarget.serviceWorker = {
-              controller: null,
-              getRegistration: async () => { throw new Error("registration denied"); },
-            };
-            h.cachesTarget.keys = async () => [];
-            h.cachesTarget.open = async () => { throw new Error("not reached"); };
-            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
-            await h.controller.show({ opener: null });
-            const rows = {};
-            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
-            globalThis.__result = { rows, status: h.dom.diagStatus.textContent };
-            """
-        )
-        result = run_node_json(js)
-        self.assertEqual(result["rows"]["Registration"], "unavailable")
-        self.assertEqual(result["rows"]["Caches"], "none")
-        self.assertEqual(result["status"], "")
 
     def test_copy_conversation_action_delegates_after_details_load(self) -> None:
         js = harness_script(
