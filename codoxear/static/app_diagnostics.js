@@ -73,6 +73,12 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
     const afterModalVisibilityChanged = requireFunction(options.afterModalVisibilityChanged, "afterModalVisibilityChanged");
     const el = requireFunction(options.el, "el");
     const uiVersion = requireString(options.uiVersion, "uiVersion");
+    const navigatorTarget = Object.prototype.hasOwnProperty.call(options, "navigatorTarget")
+      ? options.navigatorTarget
+      : (typeof navigator === "undefined" ? undefined : navigator);
+    const cachesTarget = Object.prototype.hasOwnProperty.call(options, "cachesTarget")
+      ? options.cachesTarget
+      : (typeof caches === "undefined" ? undefined : caches);
 
     const requestFrame = typeof options.requestFrame === "function" ? options.requestFrame : requestAnimationFrame;
 
@@ -101,7 +107,87 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
       content.appendChild(row);
     }
 
-    function renderFailedLaunchRows(sid, selectedInfo) {
+    function appendOfflinePwaRows(rows, diagRows = null) {
+      diagContent.appendChild(el("div", { class: "detailsSection", text: "Offline / PWA" }));
+      for (const [label, value] of rows) addRowTo(diagContent, diagRows, label, value);
+    }
+
+    async function collectOfflinePwaRows() {
+      const rows = [
+        ["SW API supported", "unavailable"],
+        ["Page controlled", "unavailable"],
+        ["Registration", "unavailable"],
+        ["Caches", "unavailable"],
+        ["navigator.onLine", "unavailable"],
+      ];
+      let serviceWorker = null;
+      try {
+        serviceWorker = navigatorTarget && navigatorTarget.serviceWorker ? navigatorTarget.serviceWorker : null;
+        rows[0][1] = serviceWorker ? "yes" : "no";
+      } catch (_error) {
+        rows[0][1] = "unavailable";
+      }
+
+      if (serviceWorker) {
+        try {
+          const controller = serviceWorker.controller;
+          rows[1][1] = controller ? (controller.scriptURL || "unavailable") : "no";
+        } catch (_error) {
+          rows[1][1] = "unavailable";
+        }
+        if (typeof serviceWorker.getRegistration === "function") {
+          try {
+            const registration = await serviceWorker.getRegistration();
+            if (!registration) {
+              rows[2][1] = "none";
+            } else {
+              const active = registration.active;
+              const scope = registration.scope || "unavailable";
+              const state = active && active.state ? active.state : "none";
+              const scriptURL = active && active.scriptURL ? active.scriptURL : "none";
+              rows[2][1] = `scope: ${scope}\nactive state: ${state}\nactive script: ${scriptURL}`;
+            }
+          } catch (_error) {
+            rows[2][1] = "unavailable";
+          }
+        }
+      }
+
+      try {
+        if (!cachesTarget || typeof cachesTarget.keys !== "function" || typeof cachesTarget.open !== "function") {
+          rows[3][1] = "unavailable";
+        } else {
+          const names = (await cachesTarget.keys()).filter((name) => String(name).startsWith("codoxear-"));
+          if (!names.length) {
+            rows[3][1] = "none";
+          } else {
+            const counts = await Promise.all(names.map(async (name) => {
+              try {
+                const cache = await cachesTarget.open(name);
+                const entries = cache && typeof cache.keys === "function" ? await cache.keys() : null;
+                return `${name}: ${entries && typeof entries.length === "number" ? `${entries.length} entries` : "unavailable"}`;
+              } catch (_error) {
+                return `${name}: unavailable`;
+              }
+            }));
+            rows[3][1] = counts.join("\n");
+          }
+        }
+      } catch (_error) {
+        rows[3][1] = "unavailable";
+      }
+
+      try {
+        rows[4][1] = typeof (navigatorTarget && navigatorTarget.onLine) === "boolean"
+          ? String(navigatorTarget.onLine)
+          : "unavailable";
+      } catch (_error) {
+        rows[4][1] = "unavailable";
+      }
+      return rows;
+    }
+
+    function renderFailedLaunchRows(sid, selectedInfo, offlinePwaRows) {
       diagStatus.textContent = "";
       const addRecoveryRow = (label, value, opts = {}) => addRowTo(diagContent, null, label, value, opts);
       addRecoveryRow("Session", sid);
@@ -119,12 +205,13 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
           ? `${selectedInfo.tmux_session}${selectedInfo.tmux_window ? ":" + selectedInfo.tmux_window : ""}`
           : "-"
       );
+      appendOfflinePwaRows(offlinePwaRows);
       diagCopyText = recoveryDetailsText(sid, selectedInfo);
       diagConversationCopyReady = true;
       applyActionButtonState();
     }
 
-    function renderLiveRows(sid, d) {
+    function renderLiveRows(sid, d, offlinePwaRows) {
       diagStatus.textContent = "";
       const now = Date.now() / 1000;
       const diagRows = [];
@@ -189,16 +276,18 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
           addRow("Context", txt);
         }
       }
+      appendOfflinePwaRows(offlinePwaRows, diagRows);
       diagCopyText = diagnosticsCopyText(sid, diagRows);
       diagConversationCopyReady = true;
       applyActionButtonState();
     }
 
-    function showErrorState(e) {
+    function showErrorState(e, offlinePwaRows) {
       diagCopyText = "";
       diagConversationCopyReady = false;
       resetActionButtonState();
       diagStatus.textContent = `error: ${e && e.message ? e.message : "unknown error"}`;
+      appendOfflinePwaRows(offlinePwaRows);
     }
 
     async function show({ opener = null } = {}) {
@@ -215,18 +304,22 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
       diagViewer.style.display = "flex";
       afterModalVisibilityChanged();
       focusModalSurface(diagViewer, requestFrame);
+      const offlinePwaRows = collectOfflinePwaRows();
       const selectedInfo = getSessionInfo(sid) || null;
       if (sessionLaunchFailed(selectedInfo)) {
-        renderFailedLaunchRows(sid, selectedInfo);
+        const rows = await offlinePwaRows;
+        if (sessionState.get("selected") !== sid) return;
+        renderFailedLaunchRows(sid, selectedInfo, rows);
         return;
       }
       try {
-        const d = await api(`/api/sessions/${sid}/diagnostics`);
+        const [d, rows] = await Promise.all([api(`/api/sessions/${sid}/diagnostics`), offlinePwaRows]);
         if (sessionState.get("selected") !== sid) return;
-        renderLiveRows(sid, d);
+        renderLiveRows(sid, d, rows);
       } catch (e) {
+        const rows = await offlinePwaRows;
         if (sessionState.get("selected") !== sid) return;
-        showErrorState(e);
+        showErrorState(e, rows);
       }
     }
 

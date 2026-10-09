@@ -71,6 +71,8 @@ const diagCloseBtn = fakeNode();
 const diagBtn = fakeNode();
 const diagCopyConversationBtn = fakeNode();
 const diagCopyBtn = fakeNode();
+const navigatorTarget = {};
+const cachesTarget = {};
 
 const deps = {
   diagBackdrop, diagViewer, diagContent, diagStatus, diagCloseBtn, diagBtn, diagCopyConversationBtn, diagCopyBtn,
@@ -105,6 +107,8 @@ const deps = {
   afterModalVisibilityChanged: () => { calls.push(["afterModalVisibilityChanged"]); },
   el: makeEl,
   uiVersion: "test-ver",
+  navigatorTarget,
+  cachesTarget,
   requestFrame: (fn) => { calls.push(["raf"]); fn(); },
 };
 
@@ -121,7 +125,7 @@ vm.runInContext(DIAG_SOURCE, ctx);
 const controller = ctx.window.CodoxearDiagnostics.createDiagnosticsController(deps);
 
 function labelValues() {
-  return diagContent._children.map((row) => {
+  return diagContent._children.filter((row) => row._class === "detailsRow").map((row) => {
     const lab = row._children[0] && row._children[0].textContent;
     const val = row._children[1] && row._children[1].textContent;
     return [lab, val];
@@ -141,6 +145,9 @@ globalThis.__harness = {
   setCopyError: (e) => { copyError = e; },
   setConversationCopyError: (e) => { conversationCopyError = e; },
   labelValues,
+  sectionTitles: () => diagContent._children.filter((row) => row._class === "detailsSection").map((row) => row.textContent),
+  navigatorTarget,
+  cachesTarget,
 };
 """
 
@@ -416,6 +423,98 @@ class TestFrontendDiagnosticsModuleBehavior(unittest.TestCase):
         self.assertContains("Session=sid-1", result["copyText"])
         self.assertContains("Provider=PROV:chatgpt", result["copyText"])
         self.assertFalse(result["copyDisabled"])
+
+    def test_offline_pwa_rows_report_full_service_worker_and_cache_state(self) -> None:
+        js = harness_script(
+            """
+            const h = globalThis.__harness;
+            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
+            h.select("sid-1");
+            h.navigatorTarget.onLine = true;
+            h.navigatorTarget.serviceWorker = {
+              controller: { scriptURL: "https://phone.example/service-worker.js" },
+              getRegistration: async () => ({
+                scope: "https://phone.example/",
+                active: { state: "activated", scriptURL: "https://phone.example/service-worker.js" },
+              }),
+            };
+            h.cachesTarget.keys = async () => ["codoxear-html-v1", "third-party", "codoxear-api-v1"];
+            h.cachesTarget.open = async (name) => ({
+              keys: async () => Array(name === "codoxear-html-v1" ? 2 : 5).fill({}),
+            });
+            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
+            await h.controller.show({ opener: null });
+            const rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            globalThis.__result = { rows, sections: h.sectionTitles() };
+            """
+        )
+        result = run_node_json(js)
+        rows = result["rows"]
+        self.assertEqual(result["sections"], ["Offline / PWA"])
+        self.assertEqual(rows["SW API supported"], "yes")
+        self.assertEqual(rows["Page controlled"], "https://phone.example/service-worker.js")
+        self.assertEqual(
+            rows["Registration"],
+            "scope: https://phone.example/\nactive state: activated\nactive script: https://phone.example/service-worker.js",
+        )
+        self.assertEqual(rows["Caches"], "codoxear-html-v1: 2 entries\ncodoxear-api-v1: 5 entries")
+        self.assertEqual(rows["navigator.onLine"], "true")
+
+    def test_offline_pwa_rows_explicitly_report_missing_apis_without_breaking_dialog(self) -> None:
+        js = harness_script(
+            """
+            const h = globalThis.__harness;
+            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
+            h.select("sid-1");
+            h.navigatorTarget.onLine = false;
+            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
+            await h.controller.show({ opener: null });
+            const rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            globalThis.__result = {
+              rows,
+              sections: h.sectionTitles(),
+              backdrop: h.dom.diagBackdrop.style.display,
+              viewer: h.dom.diagViewer.style.display,
+              status: h.dom.diagStatus.textContent,
+            };
+            """
+        )
+        result = run_node_json(js)
+        self.assertEqual(result["sections"], ["Offline / PWA"])
+        self.assertEqual(result["rows"]["SW API supported"], "no")
+        self.assertEqual(result["rows"]["Page controlled"], "unavailable")
+        self.assertEqual(result["rows"]["Registration"], "unavailable")
+        self.assertEqual(result["rows"]["Caches"], "unavailable")
+        self.assertEqual(result["rows"]["navigator.onLine"], "false")
+        self.assertEqual(result["backdrop"], "block")
+        self.assertEqual(result["viewer"], "flex")
+        self.assertEqual(result["status"], "")
+
+    def test_offline_pwa_registration_rejection_is_unavailable_without_throwing(self) -> None:
+        js = harness_script(
+            """
+            const h = globalThis.__harness;
+            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
+            h.select("sid-1");
+            h.navigatorTarget.serviceWorker = {
+              controller: null,
+              getRegistration: async () => { throw new Error("registration denied"); },
+            };
+            h.cachesTarget.keys = async () => [];
+            h.cachesTarget.open = async () => { throw new Error("not reached"); };
+            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
+            await h.controller.show({ opener: null });
+            const rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            globalThis.__result = { rows, status: h.dom.diagStatus.textContent };
+            """
+        )
+        result = run_node_json(js)
+        self.assertEqual(result["rows"]["Registration"], "unavailable")
+        self.assertEqual(result["rows"]["Caches"], "none")
+        self.assertEqual(result["status"], "")
 
     def test_copy_conversation_action_delegates_after_details_load(self) -> None:
         js = harness_script(

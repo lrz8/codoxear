@@ -3586,6 +3586,12 @@ select {
         border-radius: var(--radius-card);
         background: var(--paper);
       }
+      .detailsSection {
+        padding: var(--space-4) var(--space-4) var(--space-2);
+        color: var(--muted);
+        font-size: var(--font-sm);
+        font-weight: 700;
+      }
       .detailsRow {
         display: grid;
         grid-template-columns: 110px minmax(0, 1fr);

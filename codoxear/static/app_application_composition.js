@@ -937,6 +937,8 @@ import * as CodoxearWiring from "./app_wiring.js";
             afterModalVisibilityChanged,
             el,
             uiVersion: UI_VERSION,
+            navigatorTarget: navigator,
+            cachesTarget: typeof caches === "undefined" ? undefined : caches,
           }));
         })();
 
