@@ -116,6 +116,7 @@ const ctx = {
   HTMLElement: function HTMLElement() {},
   document: { activeElement: null },
   window: {},
+  URL,
   console,
 };
 vm.createContext(ctx);
@@ -460,6 +461,57 @@ class TestFrontendDiagnosticsModuleBehavior(unittest.TestCase):
         )
         self.assertEqual(rows["Caches"], "codoxear-html-v1: 2 entries\ncodoxear-api-v1: 5 entries")
         self.assertEqual(rows["navigator.onLine"], "true")
+
+    def test_offline_pwa_rows_render_navigation_marker_states_and_absence(self) -> None:
+        js = harness_script(
+            """
+            const h = globalThis.__harness;
+            h.sessions.set("sid-1", { session_id: "sid-1", launch_state: "ready", agent_backend: "codex" });
+            h.select("sid-1");
+            h.navigatorTarget.serviceWorker = {
+              controller: { scriptURL: "https://phone.example/codoxear/service-worker.js" },
+              getRegistration: async () => ({
+                scope: "https://phone.example/codoxear/",
+                active: { state: "activated", scriptURL: "https://phone.example/codoxear/service-worker.js" },
+              }),
+            };
+            let marker = { ts: Date.UTC(2026, 9, 9, 14, 52, 11), offline: false, url: "https://phone.example/codoxear/" };
+            const markerKeys = [];
+            h.cachesTarget.keys = async () => ["codoxear-html-v1", "codoxear-sw-meta-v1"];
+            h.cachesTarget.open = async (name) => name === "codoxear-sw-meta-v1"
+              ? { keys: async () => [{}], match: async (key) => {
+                markerKeys.push(key.href || key.url);
+                return marker ? { json: async () => marker } : undefined;
+              } }
+              : { keys: async () => [{}] };
+            h.setApiResponse({ session_id: "sid-1", agent_backend: "codex" });
+            await h.controller.show({ opener: null });
+            let rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            const network = rows["Last SW navigation"];
+
+            marker = { ts: Date.UTC(2026, 9, 9, 14, 52, 11), offline: true, url: "https://phone.example/codoxear/" };
+            await h.controller.show({ opener: null });
+            rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            const fallback = rows["Last SW navigation"];
+
+            marker = null;
+            await h.controller.show({ opener: null });
+            rows = {};
+            h.labelValues().forEach(([k, v]) => { rows[k] = v; });
+            globalThis.__result = { network, fallback, absent: rows["Last SW navigation"], markerKeys };
+            """
+        )
+        result = run_node_json(js)
+        self.assertEqual(result["network"], "2026-10-09 14:52:11 (network)")
+        self.assertEqual(result["fallback"], "2026-10-09 14:52:11 (cache fallback)")
+        self.assertEqual(result["absent"], "none")
+        self.assertEqual(result["markerKeys"], [
+            "https://phone.example/codoxear/sw-meta/last-navigation",
+            "https://phone.example/codoxear/sw-meta/last-navigation",
+            "https://phone.example/codoxear/sw-meta/last-navigation",
+        ])
 
     def test_offline_pwa_rows_explicitly_report_missing_apis_without_breaking_dialog(self) -> None:
         js = harness_script(

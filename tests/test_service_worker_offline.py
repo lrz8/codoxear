@@ -44,7 +44,7 @@ const self = {
   async skipWaiting() { skips++; },
   addEventListener(type, listener) { listeners[type] = listener; },
 };
-const ctx = { self, clients, caches, URL, Request, console: { warn: (...args) => warnings.push(args) }, fetch: async request => { fetches.push(request.url); return network(request); } };
+const ctx = { self, clients, caches, URL, Request, Response, console: { warn: (...args) => warnings.push(args) }, fetch: async request => { fetches.push(request.url); return network(request); } };
 vm.createContext(ctx);
 vm.runInContext(WORKER_SOURCE, ctx);
 function dispatch(type, extra = {}) {
@@ -83,6 +83,40 @@ def test_navigation_network_first_and_ignore_search_offline_fallback() -> None:
       offline();
       assert.equal(await (await get('/?entry=two', { mode: 'navigate' })).text(), 'fresh shell');
       await assert.rejects(get('/uncached', { mode: 'navigate' }), /offline/);
+    """)
+
+
+def test_navigation_marker_records_network_fallback_and_rethrow_without_changing_response() -> None:
+    run_worker("""
+      network = async () => new Response('network shell');
+      assert.equal(await (await get('/?first=1', { mode: 'navigate' })).text(), 'network shell');
+      let marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
+      assert.equal(marker.offline, false);
+      assert.equal(marker.url, origin + '/?first=1');
+      assert.equal(typeof marker.ts, 'number');
+
+      offline();
+      assert.equal(await (await get('/?second=2', { mode: 'navigate' })).text(), 'network shell');
+      marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
+      assert.equal(marker.offline, true);
+      assert.equal(marker.url, origin + '/?second=2');
+
+      const event = dispatch('fetch', { request: request('/uncached', { mode: 'navigate' }) });
+      await assert.rejects(event.response, /offline/);
+      await event.finish();
+      marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
+      assert.equal(marker.offline, true);
+      assert.equal(marker.url, origin + '/uncached');
+
+      const openCache = caches.open;
+      caches.open = async (name) => {
+        if (name === 'codoxear-sw-meta-v1') throw new Error('marker storage unavailable');
+        return openCache(name);
+      };
+      network = async () => new Response('still delivered');
+      const markerFailure = dispatch('fetch', { request: request('/marker-write-failure', { mode: 'navigate' }) });
+      assert.equal(await (await markerFailure.response).text(), 'still delivered');
+      await markerFailure.finish();
     """)
 
 
@@ -185,6 +219,7 @@ def test_unversioned_static_serves_cache_before_background_revalidation_finishes
 def test_install_activate_and_push_notification_behavior() -> None:
     run_worker("""
       await caches.open('codoxear-static-old');
+      await caches.open('codoxear-sw-meta-v1');
       await caches.open('other-app');
       await caches.open('codoxear-api-v1');
       await dispatch('install').finish();
@@ -193,6 +228,7 @@ def test_install_activate_and_push_notification_behavior() -> None:
       assert.equal(skips, 1);
       assert.deepEqual(clientCalls, ['claim']);
       assert.equal((await caches.keys()).includes('codoxear-static-old'), false);
+      assert.ok((await caches.keys()).includes('codoxear-sw-meta-v1'));
       assert.ok((await caches.keys()).includes('other-app'));
       assert.ok(warnings.length > 0);
       await dispatch('push', { data: { json: () => ({ session_display_name: 'Repo', notification_text: 'Done', session_id: 'a b' }) } }).finish();

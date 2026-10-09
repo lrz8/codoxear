@@ -1,7 +1,8 @@
 const HTML_CACHE = "codoxear-html-v1";
 const STATIC_CACHE = "codoxear-static-v1";
 const API_CACHE = "codoxear-api-v1";
-const APP_CACHES = new Set([HTML_CACHE, STATIC_CACHE, API_CACHE]);
+const SW_META_CACHE = "codoxear-sw-meta-v1";
+const APP_CACHES = new Set([HTML_CACHE, STATIC_CACHE, API_CACHE, SW_META_CACHE]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -93,6 +94,47 @@ async function versionedStatic(request) {
   return cached || fetchAndCache(request, cache, { pruneVersions: true });
 }
 
+function recordNavigation(request, offline) {
+  const markerKey = new URL("sw-meta/last-navigation", self.registration.scope);
+  const marker = JSON.stringify({ ts: Date.now(), offline, url: request.url });
+  return caches.open(SW_META_CACHE).then((cache) => cache.put(
+    new Request(markerKey),
+    new Response(marker, { headers: { "content-type": "application/json" } })
+  ));
+}
+
+function startNavigationMarker(event, request) {
+  let finish;
+  event.waitUntil(new Promise((resolve) => {
+    finish = (offline) => {
+      try {
+        resolve(recordNavigation(request, offline).catch(() => {}));
+      } catch (_error) {
+        resolve();
+      }
+    };
+  }));
+  return finish;
+}
+
+async function navigationNetworkFirst(request, finishMarker) {
+  let offline = false;
+  try {
+    const cache = await caches.open(HTML_CACHE);
+    try {
+      return await fetchAndCache(request, cache);
+    } catch (error) {
+      offline = true;
+      const cached = await cache.match(request, { ignoreSearch: true });
+      if (cached) return cached;
+      throw error;
+    }
+  } finally {
+    // Diagnostics must never alter navigation delivery, including a failed fallback.
+    finishMarker(offline);
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -102,7 +144,8 @@ self.addEventListener("fetch", (event) => {
   // This is the SSE stream, not the JSON /messages/live polling route.
   if (/^\/api\/sessions\/[^/]+\/live$/.test(pathname)) return;
   if (request.mode === "navigate") {
-    event.respondWith(networkFirst(request, HTML_CACHE, { ignoreSearch: true }));
+    const finishMarker = startNavigationMarker(event, request);
+    event.respondWith(navigationNetworkFirst(request, finishMarker));
   } else if (pathname.startsWith("/api/")) {
     event.respondWith(networkFirst(request, API_CACHE));
   } else if (url.searchParams.has("v")) {

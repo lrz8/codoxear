@@ -112,15 +112,26 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
       for (const [label, value] of rows) addRowTo(diagContent, diagRows, label, value);
     }
 
+    function formatLastSwNavigation(marker) {
+      if (!marker || typeof marker !== "object" || typeof marker.offline !== "boolean") return "unavailable";
+      const date = new Date(Number(marker.ts));
+      if (!Number.isFinite(date.getTime())) return "unavailable";
+      const pad = (value) => String(value).padStart(2, "0");
+      const timestamp = `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+      return `${timestamp} (${marker.offline ? "cache fallback" : "network"})`;
+    }
+
     async function collectOfflinePwaRows() {
       const rows = [
         ["SW API supported", "unavailable"],
         ["Page controlled", "unavailable"],
         ["Registration", "unavailable"],
         ["Caches", "unavailable"],
+        ["Last SW navigation", "unavailable"],
         ["navigator.onLine", "unavailable"],
       ];
       let serviceWorker = null;
+      let registration = null;
       try {
         serviceWorker = navigatorTarget && navigatorTarget.serviceWorker ? navigatorTarget.serviceWorker : null;
         rows[0][1] = serviceWorker ? "yes" : "no";
@@ -137,7 +148,7 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
         }
         if (typeof serviceWorker.getRegistration === "function") {
           try {
-            const registration = await serviceWorker.getRegistration();
+            registration = await serviceWorker.getRegistration();
             if (!registration) {
               rows[2][1] = "none";
             } else {
@@ -178,11 +189,36 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
       }
 
       try {
-        rows[4][1] = typeof (navigatorTarget && navigatorTarget.onLine) === "boolean"
+        if (!cachesTarget || typeof cachesTarget.open !== "function") {
+          rows[4][1] = "unavailable";
+        } else {
+          const scope = registration && typeof registration.scope === "string" && registration.scope
+            ? registration.scope
+            : (typeof location !== "undefined" && location ? location.href : null);
+          if (!scope) {
+            rows[4][1] = "unavailable";
+          } else {
+            const metaCache = await cachesTarget.open("codoxear-sw-meta-v1");
+            if (!metaCache || typeof metaCache.match !== "function") {
+              rows[4][1] = "unavailable";
+            } else {
+              const markerResponse = await metaCache.match(new URL("sw-meta/last-navigation", scope));
+              rows[4][1] = markerResponse
+                ? formatLastSwNavigation(await markerResponse.json())
+                : "none";
+            }
+          }
+        }
+      } catch (_error) {
+        rows[4][1] = "unavailable";
+      }
+
+      try {
+        rows[5][1] = typeof (navigatorTarget && navigatorTarget.onLine) === "boolean"
           ? String(navigatorTarget.onLine)
           : "unavailable";
       } catch (_error) {
-        rows[4][1] = "unavailable";
+        rows[5][1] = "unavailable";
       }
       return rows;
     }
