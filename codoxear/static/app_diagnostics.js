@@ -128,6 +128,7 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
         ["Registration", "unavailable"],
         ["Caches", "unavailable"],
         ["Last SW navigation", "unavailable"],
+        ["Last offline SW navigation", "unavailable"],
         ["navigator.onLine", "unavailable"],
       ];
       let serviceWorker = null;
@@ -197,28 +198,33 @@ import * as CodoxearSessionHelpers from "./app_session_helpers.js";
             : (typeof location !== "undefined" && location ? location.href : null);
           if (!scope) {
             rows[4][1] = "unavailable";
+            rows[5][1] = "unavailable";
           } else {
             const metaCache = await cachesTarget.open("codoxear-sw-meta-v1");
             if (!metaCache || typeof metaCache.match !== "function") {
               rows[4][1] = "unavailable";
+              rows[5][1] = "unavailable";
             } else {
-              const markerResponse = await metaCache.match(new URL("sw-meta/last-navigation", scope));
-              rows[4][1] = markerResponse
-                ? formatLastSwNavigation(await markerResponse.json())
-                : "none";
+              const markers = await Promise.all(["last-navigation", "last-offline-navigation"].map(async (name) => {
+                const response = await metaCache.match(new URL(`sw-meta/${name}`, scope));
+                return response ? formatLastSwNavigation(await response.json()) : "none";
+              }));
+              rows[4][1] = markers[0];
+              rows[5][1] = markers[1];
             }
           }
         }
       } catch (_error) {
         rows[4][1] = "unavailable";
+        rows[5][1] = "unavailable";
       }
 
       try {
-        rows[5][1] = typeof (navigatorTarget && navigatorTarget.onLine) === "boolean"
+        rows[6][1] = typeof (navigatorTarget && navigatorTarget.onLine) === "boolean"
           ? String(navigatorTarget.onLine)
           : "unavailable";
       } catch (_error) {
-        rows[5][1] = "unavailable";
+        rows[6][1] = "unavailable";
       }
       return rows;
     }

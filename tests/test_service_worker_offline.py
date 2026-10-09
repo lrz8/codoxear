@@ -86,36 +86,39 @@ def test_navigation_network_first_and_ignore_search_offline_fallback() -> None:
     """)
 
 
-def test_navigation_marker_records_network_fallback_and_rethrow_without_changing_response() -> None:
+def test_navigation_marker_preserves_last_offline_fallback_across_network_recovery() -> None:
     run_worker("""
       network = async () => new Response('network shell');
       assert.equal(await (await get('/?first=1', { mode: 'navigate' })).text(), 'network shell');
       let marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
       assert.equal(marker.offline, false);
       assert.equal(marker.url, origin + '/?first=1');
-      assert.equal(typeof marker.ts, 'number');
+      assert.equal(await cached('codoxear-sw-meta-v1', '/sw-meta/last-offline-navigation'), undefined);
 
       offline();
       assert.equal(await (await get('/?second=2', { mode: 'navigate' })).text(), 'network shell');
       marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
+      const offlineMarker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-offline-navigation')).json();
       assert.equal(marker.offline, true);
       assert.equal(marker.url, origin + '/?second=2');
+      assert.deepEqual(offlineMarker, marker);
+      assert.equal(typeof offlineMarker.ts, 'number');
 
-      const event = dispatch('fetch', { request: request('/uncached', { mode: 'navigate' }) });
-      await assert.rejects(event.response, /offline/);
-      await event.finish();
+      network = async () => new Response('recovered shell');
+      assert.equal(await (await get('/?third=3', { mode: 'navigate' })).text(), 'recovered shell');
       marker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-navigation')).json();
-      assert.equal(marker.offline, true);
-      assert.equal(marker.url, origin + '/uncached');
+      const retainedOfflineMarker = await (await cached('codoxear-sw-meta-v1', '/sw-meta/last-offline-navigation')).json();
+      assert.equal(marker.offline, false);
+      assert.equal(marker.url, origin + '/?third=3');
+      assert.deepEqual(retainedOfflineMarker, offlineMarker);
 
       const openCache = caches.open;
       caches.open = async (name) => {
         if (name === 'codoxear-sw-meta-v1') throw new Error('marker storage unavailable');
         return openCache(name);
       };
-      network = async () => new Response('still delivered');
       const markerFailure = dispatch('fetch', { request: request('/marker-write-failure', { mode: 'navigate' }) });
-      assert.equal(await (await markerFailure.response).text(), 'still delivered');
+      assert.equal(await (await markerFailure.response).text(), 'recovered shell');
       await markerFailure.finish();
     """)
 

@@ -95,12 +95,13 @@ async function versionedStatic(request) {
 }
 
 function recordNavigation(request, offline) {
-  const markerKey = new URL("sw-meta/last-navigation", self.registration.scope);
   const marker = JSON.stringify({ ts: Date.now(), offline, url: request.url });
-  return caches.open(SW_META_CACHE).then((cache) => cache.put(
-    new Request(markerKey),
+  const markerNames = ["last-navigation"];
+  if (offline) markerNames.push("last-offline-navigation");
+  return caches.open(SW_META_CACHE).then((cache) => Promise.all(markerNames.map((name) => cache.put(
+    new Request(new URL(`sw-meta/${name}`, self.registration.scope)),
     new Response(marker, { headers: { "content-type": "application/json" } })
-  ));
+  ))));
 }
 
 function startNavigationMarker(event, request) {
