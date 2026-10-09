@@ -1,4 +1,5 @@
 import * as CodoxearVoiceHelpers from "./app_voice_helpers.js";
+import * as CodoxearSW from "./app_sw.js";
 
 const base64UrlToUint8Array = CodoxearVoiceHelpers.base64UrlToUint8Array;
 const notificationDeviceClass = CodoxearVoiceHelpers.notificationDeviceClass;
@@ -42,8 +43,6 @@ function createNotificationRuntime(options = {}) {
   const api = requireFunction(options.api, "api");
   const setToast = requireFunction(options.setToast, "setToast");
   const handleAppAuthLoss = requireFunction(options.handleAppAuthLoss, "handleAppAuthLoss");
-  const resolveAppUrl = requireFunction(options.resolveAppUrl, "resolveAppUrl");
-  const versionedShellAssetPath = requireFunction(options.versionedShellAssetPath, "versionedShellAssetPath");
   const storageGetItem = requireFunction(options.storageGetItem, "storageGetItem");
   const storageSetItem = requireFunction(options.storageSetItem, "storageSetItem");
   const storageRemoveItem = requireFunction(options.storageRemoveItem, "storageRemoveItem");
@@ -253,9 +252,7 @@ function createNotificationRuntime(options = {}) {
       throw new Error("push notifications are not supported in this browser");
     }
     if (!swRegistration) {
-      swRegistration = await navigatorTarget.serviceWorker.register(resolveAppUrl(versionedShellAssetPath("/service-worker.js")), {
-        scope: resolveAppUrl("/"),
-      });
+      swRegistration = await CodoxearSW.ensureAppServiceWorker(navigatorTarget);
     }
     return swRegistration;
   }
