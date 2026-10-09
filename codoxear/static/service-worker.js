@@ -4,6 +4,8 @@ const API_CACHE = "codoxear-api-v1";
 const SW_META_CACHE = "codoxear-sw-meta-v1";
 const APP_CACHES = new Set([HTML_CACHE, STATIC_CACHE, API_CACHE, SW_META_CACHE]);
 const NETWORK_FIRST_TIMEOUT_MS = 3000;
+const NETWORK_SUSPECT_WINDOW_MS = 30000;
+let networkSuspectUntil = 0;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -88,9 +90,22 @@ async function networkFirst(event, cacheName, matchOptions, onFallback) {
       return cached;
     }
   }
+  if (Date.now() < networkSuspectUntil) {
+    const cached = await cache.match(request, matchOptions);
+    if (cached) {
+      onFallback?.();
+      event.waitUntil(fetchAndCache(request, cache).then(() => {
+        networkSuspectUntil = 0;
+      }).catch(() => {}));
+      return cached;
+    }
+  }
   // Airplane + VPN tails and captive portals can hang instead of rejecting.
   // Bound response delivery, but retain the fetch so late success refreshes cache.
-  const network = fetchAndCache(request, cache);
+  const network = fetchAndCache(request, cache).then((response) => {
+    networkSuspectUntil = 0;
+    return response;
+  });
   event.waitUntil(network.catch(() => {}));
   let timer;
   try {
@@ -101,6 +116,7 @@ async function networkFirst(event, cacheName, matchOptions, onFallback) {
       }),
     ]);
   } catch (error) {
+    networkSuspectUntil = Date.now() + NETWORK_SUSPECT_WINDOW_MS;
     onFallback?.();
     const cached = await cache.match(request, matchOptions);
     if (cached) return cached;
