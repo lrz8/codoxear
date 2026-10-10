@@ -88,8 +88,12 @@ function createPathCompletionRuntime({ api, onChange, setTimeout: timerSet = (..
   function sync(value, caret, selectedSessionId) {
     if (anchor !== null) {
       const active = value.slice(anchor, caret);
+      // A whitespace at the caret boundary ends the token: interior spaces
+      // stay legal (anchored span across accepted names containing spaces),
+      // but a trailing space can only come from the user finishing the path.
       if (!selectedSessionId || selectedSessionId !== sessionId || caret < anchor
-          || !hasPathPrefix(active, anchor) || /[\n\r]/.test(active)) {
+          || !hasPathPrefix(active, anchor) || /[\n\r]/.test(active)
+          || /\s$/.test(active)) {
         close();
         return null;
       }

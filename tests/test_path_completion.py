@@ -160,6 +160,24 @@ def test_runtime_anchors_spaces_debounces_aborts_and_drops_stale_responses() -> 
     """)
 
 
+def test_typed_whitespace_ends_anchored_path_session() -> None:
+    run_js(r"""
+    const h = harness(() => listing([{ name: 'src', completion: './src/', is_dir: true }]));
+    await h.type('./sr');
+    assert.equal(h.open(), true);
+    await h.type('./sr ');
+    assert.equal(h.open(), false);
+    assert.equal(h.requests.length, 1);
+    await h.type('./sr more words');
+    assert.equal(h.open(), false);
+    assert.equal(h.requests.length, 1);
+    await h.type('./sr more words ./re');
+    assert.equal(h.open(), true);
+    assert.match(h.requests[1].url, /path=.%2Fre&limit=50$/);
+    h.controller.dispose();
+    """)
+
+
 def test_directory_then_file_acceptance_preserves_focus_saves_and_highlights() -> None:
     run_js(r"""
     const h = harness((url) => listing(url.includes('space%2F') ? [file] : [directory], '/work'));
