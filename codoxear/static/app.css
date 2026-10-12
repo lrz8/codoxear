@@ -2147,7 +2147,7 @@ select {
         padding: calc((var(--composerCtl) - 20px) / 2) var(--space-4);
         height: var(--composerCtl);
         min-height: var(--composerCtl);
-        max-height: 140px;
+        max-height: 180px;
         resize: none;
         overflow-y: hidden;
         font-size: var(--font-xl);
@@ -2159,6 +2159,53 @@ select {
       .composer textarea:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+      }
+      /* Height modes (app_composer.js owns composer[data-height]). Tall is a
+         fixed height, overridable by the drag handle through --composer-tall-h;
+         its max-height keeps topbar and composer chrome inside the viewport.
+         Full is pure in-flow flex: the composer takes the whole .main column
+         and the transcript collapses. */
+      .composer[data-height="tall"] textarea {
+        height: var(--composer-tall-h, calc(var(--appH, 100dvh) * 0.55));
+        max-height: calc(var(--appH, 100dvh) - 140px);
+        overflow-y: auto;
+      }
+      .composer[data-height="full"] {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .composer[data-height="full"] form {
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+      }
+      .composer[data-height="full"] .composerInputRow {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .composer[data-height="full"] .inputWrap {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .composer[data-height="full"] textarea {
+        flex: 1;
+        height: auto;
+        max-height: none;
+        overflow-y: auto;
+      }
+      .main:has(> .composer[data-height="full"]) .chatWrap {
+        display: none;
+      }
+      /* The expand button doubles as a vertical drag handle. */
+      #expandBtn {
+        touch-action: none;
+      }
+      .composer .icon-btn.expanded {
+        color: var(--accent);
       }
       .composer button {
         flex: 0 0 auto;

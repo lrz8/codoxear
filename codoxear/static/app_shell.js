@@ -96,11 +96,12 @@ function requireFunction(value, name) {
     modelPicker.style.display = "none";
     const imgInput = el("input", { id: "imgInput", type: "file", multiple: "multiple", "data-hint-excluded": "hidden-file-input", style: "display:none" });
     const attachBtn = el("button", { class: "icon-btn", id: "attachBtn", type: "button", title: "Attach file", "aria-label": "Attach file", "data-hint": "a", html: iconSvg("paperclip") });
+    const expandBtn = el("button", { class: "icon-btn", id: "expandBtn", type: "button", title: "Expand composer", "aria-label": "Expand composer", "aria-pressed": "false", "data-hint": "j", html: iconSvg("expand") });
     const queueBtn = el("button", { class: "icon-btn", id: "queueBtn", type: "button", title: "Queued messages", "aria-label": "Queued messages", "data-hint": "q", html: iconSvg("queue") });
     const sendBtn = el("button", { class: "icon-btn primary", id: "sendBtn", type: "submit", title: "Send", "aria-label": "Send", "data-hint": "e", html: iconSvg("send") });
     const form = el("form", {}, [
       stagedTray,
-      el("div", { class: "composerInputRow" }, [attachBtn, el("div", { class: "inputWrap" }, [textarea, msgPh]), queueBtn, sendBtn]),
+      el("div", { class: "composerInputRow" }, [attachBtn, expandBtn, el("div", { class: "inputWrap" }, [textarea, msgPh]), queueBtn, sendBtn]),
       modelPicker,
       imgInput,
     ]);
@@ -111,7 +112,7 @@ function requireFunction(value, name) {
     app.append(sidebar, main, backdrop);
     root.append(app);
 
-    const elements = Object.freeze({ root, app, backdrop, sidebar, sessionsWrap, sidebarEmptyHint, main, chatWrap, chatHeader, chatEmptyState, chat, chatInner, olderWrap, olderBtn, olderRetryBtn, olderError, olderErrorText, bottomSentinel, jumpBtn, chatTimeChip, chatSearchInput, chatSearchPrevBtn, chatSearchNextBtn, chatSearchCloseBtn, chatSearchStatus, chatSearchAllHintEl, chatSearchBar, chatNavRail, titleLabel, topMeta, topActions, toast, networkBanner, toggleSidebarBtn, unattendedBtn, sidebarHeaderActions, voiceHost, diagBtn, prevUserBtn, nextUserBtn, chatSearchBtn, fileBtn, composer, form, textarea, msgPh, modelPicker, imgInput, attachBtn, queueBtn, sendBtn, stagedTray });
+    const elements = Object.freeze({ root, app, backdrop, sidebar, sessionsWrap, sidebarEmptyHint, main, chatWrap, chatHeader, chatEmptyState, chat, chatInner, olderWrap, olderBtn, olderRetryBtn, olderError, olderErrorText, bottomSentinel, jumpBtn, chatTimeChip, chatSearchInput, chatSearchPrevBtn, chatSearchNextBtn, chatSearchCloseBtn, chatSearchStatus, chatSearchAllHintEl, chatSearchBar, chatNavRail, titleLabel, topMeta, topActions, toast, networkBanner, toggleSidebarBtn, unattendedBtn, sidebarHeaderActions, voiceHost, diagBtn, prevUserBtn, nextUserBtn, chatSearchBtn, fileBtn, composer, form, textarea, msgPh, modelPicker, imgInput, attachBtn, expandBtn, queueBtn, sendBtn, stagedTray });
     return Object.freeze({ elements, cleanup() { root.innerHTML = ""; } });
   }
 
@@ -396,7 +397,7 @@ function requireFunction(value, name) {
   <li>Chat search closes with its <b>Close</b> button — or press <b>Tab</b> to move focus to that button, then <b>Enter</b>. <b>Esc</b> does not close it.</li>
   <li>Busy rows show tool activity plus a reasoning-token count only when the backend reports positive token usage. Tool/thinking counts never decrease during an open turn; <b>▸N</b> is a separate live subagent gauge and can decrease when a worker finishes.</li>
   <li>On a <b>Pi</b> session, type <b>/model</b> in the composer to switch models live, or <b>/effort</b> to switch the reasoning level; <b>/thinking</b> remains an alias. Start typing to filter the list, then choose an entry. The model picker lists configured providers and models; the effort picker lists the levels the current model supports.</li>
-  <li>Press <b>f</b> to show keyboard hints over each activatable control in the current viewport. Hidden, off-screen, disabled, and hit-test-covered controls are excluded. Stable shell labels include <b>1</b>–<b>9</b> sessions; <b>s</b> sidebar; <b>t</b> edit conversation; <b>b</b> files; <b>d</b> details; <b>u</b> unattended; <b>z</b> interrupt; <b>/</b> search; <b>p</b>/<b>n</b> previous/next user message; <b>o</b> older messages; <b>g</b> latest; <b>a</b> attach; <b>q</b> queued messages; <b>e</b> send; <b>i</b> message box; <b>c</b> new session; <b>h</b> help; <b>w</b> settings; and <b>l</b> log out. Extra visible controls receive their displayed dynamic label. Press <b>Escape</b> or <b>Backspace</b> to cancel.</li>
+  <li>Press <b>f</b> to show keyboard hints over each activatable control in the current viewport. Hidden, off-screen, disabled, and hit-test-covered controls are excluded. Stable shell labels include <b>1</b>–<b>9</b> sessions; <b>s</b> sidebar; <b>t</b> edit conversation; <b>b</b> files; <b>d</b> details; <b>u</b> unattended; <b>z</b> interrupt; <b>/</b> search; <b>p</b>/<b>n</b> previous/next user message; <b>o</b> older messages; <b>g</b> latest; <b>a</b> attach; <b>j</b> expand composer; <b>q</b> queued messages; <b>e</b> send; <b>i</b> message box; <b>c</b> new session; <b>h</b> help; <b>w</b> settings; and <b>l</b> log out. Extra visible controls receive their displayed dynamic label. Press <b>Escape</b> or <b>Backspace</b> to cancel.</li>
   <li>In an open dialog, press a visible button's first distinctive letter to activate it. When buttons share their first letter, use a later distinctive letter. <b>Escape never closes a dialog</b>: use its close or cancel button, the button's distinctive letter, or <b>f</b>-hints.</li>
   <li>Direct shortcuts (no leader): <b>i</b> focus message box; <b>j</b>/<b>k</b> scroll down/up; <b>d</b>/<b>u</b> scroll half-page down/up; <b>G</b> go to bottom; <b>D</b> delete current session (confirm); <b>/</b> search; <b>Esc</b> exit message box or close a picker.</li>
 </ul>

@@ -159,6 +159,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           modelPicker,
           imgInput,
           attachBtn,
+          expandBtn,
           queueBtn,
           sendBtn,
         } = shellDOM.elements;
@@ -1178,6 +1179,9 @@ import * as CodoxearWiring from "./app_wiring.js";
           textarea,
           msgPh,
           modelPicker,
+          composer,
+          expandBtn,
+          iconSvg,
           sendBtn,
           sendChoice,
           sendChoiceBackdrop,

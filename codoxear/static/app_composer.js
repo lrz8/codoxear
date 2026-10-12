@@ -46,6 +46,17 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
     const storageRemoveItem = requireFunction(options.storageRemoveItem, "storageRemoveItem");
     const getNewSessionDefaults = () => sessionCatalog.get("newSessionDefaults");
     const modelPicker = options.modelPicker && typeof options.modelPicker === "object" ? options.modelPicker : null;
+    // Height-mode controls are optional like modelPicker: without both nodes the
+    // composer stays permanently in normal auto-grow mode.
+    const composerEl = options.composer && typeof options.composer === "object" && options.composer.dataset ? options.composer : null;
+    const expandBtn = options.expandBtn && typeof options.expandBtn.addEventListener === "function" ? options.expandBtn : null;
+    const iconSvg = typeof options.iconSvg === "function" ? options.iconSvg : () => "";
+    // Browser-dependent measurement seams (real-browser defaults).
+    const measureTextareaHeight = typeof options.measureTextareaHeight === "function" ? options.measureTextareaHeight : () => textarea.getBoundingClientRect().height;
+    const getAppHeight = typeof options.getAppHeight === "function" ? options.getAppHeight : () => {
+      const fromVar = parseFloat(getComputedStyleFn(document.documentElement).getPropertyValue("--appH"));
+      return fromVar > 0 ? fromVar : window.innerHeight;
+    };
     const onAutoGrow = typeof options.onAutoGrow === "function" ? options.onAutoGrow : () => {};
     const requestFrame = typeof options.requestFrame === "function" ? options.requestFrame : (callback) => requestAnimationFrame(callback);
     const getComputedStyleFn = typeof options.getComputedStyle === "function" ? options.getComputedStyle : (node) => getComputedStyle(node);
@@ -64,6 +75,19 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       cleanups.push(() => target.removeEventListener(type, handler, eventOptions));
     };
     const sessionDraftKey = (sessionId) => `codexweb.draft.${sessionId}`;
+    const heightModeKey = (sessionId) => `codexweb.composerHeight.${sessionId}`;
+    const DRAG_THRESHOLD_PX = 8;
+    const NORMAL_SNAP_FACTOR = 1.3;
+    const FULL_SNAP_FACTOR = 0.9;
+    const DEFAULT_NORMAL_CAP_PX = 180;
+    // Height mode: "normal" auto-grows to the CSS max-height cap, "tall" is a
+    // fixed height, "full" fills the .main column. applyHeightMode is the sole
+    // writer of composer[data-height] and of the fixed-height custom property.
+    let heightMode = "normal";
+    let tallHeightPx = null;
+    let normalOverflow = false;
+    let heightDragActive = false;
+    let renderedExpandIcon = "";
     let sendChoicePending = null;
     let sendChoiceReturnFocusEl = null;
     let modelPickerOpen = false;
@@ -589,11 +613,47 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       syncComposerState();
     }
 
+    // The CSS max-height on `.composer textarea` is the single source of truth
+    // for the normal-mode cap. Fixed modes restyle max-height, so the cap is
+    // only re-read while in normal mode and the last value is reused otherwise;
+    // an unparseable value falls back to the CSS default.
+    let normalCapPx = DEFAULT_NORMAL_CAP_PX;
+    function normalCap() {
+      if (heightMode === "normal") {
+        const parsed = parseFloat(getComputedStyleFn(textarea).maxHeight);
+        normalCapPx = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_NORMAL_CAP_PX;
+      }
+      return normalCapPx;
+    }
+
+    function syncExpandBtn() {
+      if (!expandBtn) return;
+      const expanded = heightMode !== "normal";
+      expandBtn.style.display = expanded || normalOverflow || heightDragActive ? "" : "none";
+      const iconName = heightMode === "full" ? "collapse" : "expand";
+      if (iconName !== renderedExpandIcon) {
+        renderedExpandIcon = iconName;
+        expandBtn.innerHTML = iconSvg(iconName);
+      }
+      expandBtn.classList.toggle("expanded", expanded);
+      const label = heightMode === "normal" ? "Expand composer" : heightMode === "tall" ? "Expand composer fully" : "Restore composer height";
+      expandBtn.title = label;
+      expandBtn.setAttribute("aria-label", label);
+      expandBtn.setAttribute("aria-pressed", expanded ? "true" : "false");
+    }
+
     function autoGrow() {
       const basePx = parseFloat(getComputedStyleFn(textarea).minHeight || "0") || 32;
-      const maxPx = 180;
       const stagedCount = getStagedAttachments().length;
       msgPh.style.display = textarea.value || stagedCount ? "none" : "flex";
+      if (heightMode !== "normal") {
+        // Fixed modes: CSS owns the height; only the multiline class is derived.
+        form.classList.toggle("multiline", textarea.value.includes("\n") || textarea.scrollHeight > basePx + 1);
+        syncExpandBtn();
+        onAutoGrow();
+        return;
+      }
+      const maxPx = normalCap();
       textarea.style.height = `${basePx}px`;
       let height = textarea.scrollHeight;
       const multiline = textarea.value.includes("\n") || height > basePx + 1;
@@ -601,8 +661,98 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       textarea.style.height = multiline ? "auto" : `${basePx}px`;
       height = textarea.scrollHeight;
       textarea.style.height = `${multiline ? Math.min(height, maxPx) : basePx}px`;
-      textarea.style.overflowY = height > maxPx ? "auto" : "hidden";
+      normalOverflow = height > maxPx;
+      textarea.style.overflowY = normalOverflow ? "auto" : "hidden";
+      syncExpandBtn();
       onAutoGrow();
+    }
+
+    function persistHeightMode() {
+      const sessionId = sessionState.get("selected");
+      if (!sessionId) return;
+      if (heightMode === "normal") storageRemoveItem(heightModeKey(sessionId));
+      else storageSetItem(heightModeKey(sessionId), JSON.stringify(heightMode === "tall" && tallHeightPx != null ? { mode: "tall", height: tallHeightPx } : { mode: heightMode }));
+    }
+
+    function applyHeightMode(mode, { persist = true, height } = {}) {
+      if (composerEl) {
+        heightMode = mode;
+        if (mode === "tall" && Number.isFinite(height)) tallHeightPx = Math.round(height);
+        composerEl.dataset.height = mode;
+        if (tallHeightPx != null) composerEl.style.setProperty("--composer-tall-h", `${tallHeightPx}px`);
+        else composerEl.style.removeProperty("--composer-tall-h");
+        if (mode !== "normal") {
+          textarea.style.height = "";
+          textarea.style.overflowY = "";
+        }
+        if (persist) persistHeightMode();
+      }
+      autoGrow();
+    }
+
+    function loadHeightMode(sessionId) {
+      let stored = null;
+      if (sessionId) {
+        try { stored = JSON.parse(storageGetItem(heightModeKey(sessionId))); } catch (_) { stored = null; }
+      }
+      const mode = stored && (stored.mode === "tall" || stored.mode === "full") ? stored.mode : "normal";
+      tallHeightPx = mode === "tall" && Number.isFinite(stored.height) && stored.height > 0 ? Math.round(stored.height) : null;
+      applyHeightMode(mode, { persist: false });
+    }
+
+    // A successful send/enqueue consumed the draft: the next message starts compact.
+    function resetHeightMode() {
+      applyHeightMode("normal");
+    }
+
+    function previewHeightDrag(targetPx) {
+      const appHeight = getAppHeight();
+      const basePx = parseFloat(getComputedStyleFn(textarea).minHeight || "0") || 32;
+      const target = Math.min(Math.max(targetPx, basePx), appHeight);
+      const mode = target < NORMAL_SNAP_FACTOR * normalCap() ? "normal" : target > FULL_SNAP_FACTOR * appHeight ? "full" : "tall";
+      applyHeightMode(mode, { persist: false, height: target });
+    }
+
+    function bindExpandButton() {
+      if (!expandBtn || !composerEl) return;
+      let gesture = null;
+      let suppressClick = false;
+      listen(expandBtn, "pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        suppressClick = false;
+        gesture = { startY: event.clientY, startHeight: measureTextareaHeight(), dragging: false };
+        try { expandBtn.setPointerCapture(event.pointerId); } catch (_) {}
+      });
+      listen(expandBtn, "pointermove", (event) => {
+        if (!gesture) return;
+        const dy = event.clientY - gesture.startY;
+        if (!gesture.dragging) {
+          if (Math.abs(dy) <= DRAG_THRESHOLD_PX) return;
+          gesture.dragging = true;
+          // Keep the handle rendered even if the preview snaps to normal.
+          heightDragActive = true;
+        }
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        previewHeightDrag(gesture.startHeight - dy);
+      });
+      // A browser fires `click` after a pointerup but never after a
+      // pointercancel, so only pointerup arms the click suppression.
+      const finishGesture = (event, { suppress }) => {
+        if (!gesture) return;
+        try { if (event && event.pointerId != null) expandBtn.releasePointerCapture(event.pointerId); } catch (_) {}
+        const wasDrag = gesture.dragging;
+        gesture = null;
+        if (!wasDrag) return;
+        heightDragActive = false;
+        suppressClick = suppress;
+        applyHeightMode(heightMode);
+      };
+      listen(expandBtn, "pointerup", (event) => finishGesture(event, { suppress: true }));
+      listen(expandBtn, "pointercancel", (event) => finishGesture(event, { suppress: false }));
+      listen(expandBtn, "click", () => {
+        if (suppressClick) { suppressClick = false; return; }
+        applyHeightMode(heightMode === "normal" ? "tall" : heightMode === "tall" ? "full" : "normal");
+      });
     }
 
     function saveSessionDraft(sessionId) {
@@ -730,6 +880,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       form.requestSubmit();
     });
     if (windowTarget) listen(windowTarget, "resize", onAutoGrow);
+    bindExpandButton();
 
     form.onsubmit = async (event) => {
       event.preventDefault();
@@ -750,7 +901,10 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       }
       const ok = await sendText(raw);
       if (ok) blurComposer();
-      if (ok && textarea.value === raw) clearComposer({ blur: false });
+      if (ok && textarea.value === raw) {
+        clearComposer({ blur: false });
+        resetHeightMode();
+      }
     };
 
     sendChoiceNowBtn.onclick = async () => {
@@ -760,7 +914,10 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       if (!raw || !sessionId) return;
       const ok = await sendText(raw, { sid: sessionId });
       if (ok) blurComposer();
-      if (ok && sessionId === sessionState.get("selected") && textarea.value === raw) clearComposer({ blur: false });
+      if (ok && sessionId === sessionState.get("selected") && textarea.value === raw) {
+        clearComposer({ blur: false });
+        resetHeightMode();
+      }
     };
     sendChoiceLaterBtn.onclick = async () => {
       const raw = sendChoicePending && sendChoicePending.text;
@@ -770,18 +927,22 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       hideSendChoice({ restoreFocus: true });
       if (!raw || !sessionId) return;
       const ok = await enqueueComposerText(raw, { sid: sessionId });
-      if (ok && sessionId === sessionState.get("selected") && textarea.value === raw) clearComposer();
+      if (ok && sessionId === sessionState.get("selected") && textarea.value === raw) {
+        clearComposer();
+        resetHeightMode();
+      }
     };
     sendChoiceCancelBtn.onclick = () => hideSendChoice({ restoreFocus: true });
     sendChoiceBackdrop.onclick = () => hideSendChoice({ restoreFocus: true });
 
     const unsubscribeSessionState = [
-      sessionState.subscribe("selected", () => { hideModelPicker(); syncSendButtonState(); }),
+      sessionState.subscribe("selected", () => { hideModelPicker(); loadHeightMode(sessionState.get("selected")); syncSendButtonState(); }),
       sessionState.subscribe("sending", syncSendButtonState),
       sessionCatalog.subscribe("sessionIndex", syncSendButtonState),
     ];
     syncSendButtonState();
-    autoGrow();
+    normalCap();
+    loadHeightMode(sessionState.get("selected"));
 
     return Object.freeze({
       autoGrow,

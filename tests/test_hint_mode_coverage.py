@@ -173,7 +173,7 @@ def run_shell_hint_coverage() -> dict:
         }});
         const collected = Array.from(controller.collectTargets().entries()).map(([label, node]) => ({{ label, id: id(node) }}));
         controller.enter();
-        for (const key of ["f", "a", "a"]) controller.handleKeydown({{
+        for (const key of ["f", "a", "b"]) controller.handleKeydown({{
           key,
           preventDefault() {{}},
         }});
@@ -237,11 +237,12 @@ class TestHintModeCoverage(unittest.TestCase):
                 "fileBtn": "b",
                 "msg": "i",
                 "attachBtn": "a",
+                "expandBtn": "j",
                 "queueBtn": "q",
                 "sendBtn": "e",
             },
         )
-        self.assertEqual(result["overflow"], {"label": "faa", "clicked": True})
+        self.assertEqual(result["overflow"], {"label": "fab", "clicked": True})
         self.assertEqual(
             {entry["id"]: entry["label"] for entry in result["collected"] if entry["id"] not in {"spareControl", "overflowControl"}},
             {entry["id"]: entry["label"] for entry in result["hints"]},
