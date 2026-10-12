@@ -8,7 +8,7 @@
 # with two fresh offline Pi sessions, and is driven through the host's
 # agent-browser on a loopback port that is never the live 8743. Every flow
 # runs through the real composer: a real keyboard-less fill, real mouse clicks
-# and a real mouse drag on the expand button, plus synthetic PointerEvents for
+# and a real mouse drag on the grabber strip (#expandBtn), plus synthetic PointerEvents for
 # the deterministic drag/click-suppression and snap paths.
 set -euo pipefail
 
@@ -211,6 +211,14 @@ PROBE='(() => {
     ib.style.display = prev;
   }
   const bd = b ? getComputedStyle(b).display : null;
+  const pill = document.querySelector("#expandBtn .composerGrabPill");
+  const pillBg = pill ? getComputedStyle(pill).backgroundColor : null;
+  // Resolve a custom property to the browser-normalized rgb() string by
+  // painting it on a throwaway element, so it is comparable to computed colors.
+  const resolveVar = (name) => { const probeEl = document.createElement("span"); probeEl.style.backgroundColor = "var(" + name + ")"; document.body.appendChild(probeEl); const v = getComputedStyle(probeEl).backgroundColor; probeEl.remove(); return v; };
+  const form = c ? c.querySelector("form") : null;
+  const row = document.querySelector(".composerInputRow");
+  const wrap = document.querySelector(".composer .inputWrap");
   return {
     sid, appH, innerHeight,
     height: c ? c.dataset.height : null,
@@ -227,6 +235,13 @@ PROBE='(() => {
     topbar: r(tb), topbarVisible: Boolean(tb && getComputedStyle(tb).display !== "none" && tb.getBoundingClientRect().height > 0),
     interruptReachable,
     composer: r(c), textarea: r(t), expandRect: r(b),
+    formRect: r(form), inputRowRect: r(row), inputWrapRect: r(wrap),
+    expandInInputRow: Boolean(b && b.closest(".composerInputRow")),
+    expandParentIsForm: Boolean(b && form && b.parentElement === form),
+    expandIsFirstFormChild: Boolean(b && form && form.firstElementChild === b),
+    expandCursor: b ? getComputedStyle(b).cursor : null,
+    expandTouchAction: b ? getComputedStyle(b).touchAction : null,
+    pillBg, pillRect: r(pill), accentRgb: resolveVar("--accent"), borderRgb: resolveVar("--border"),
     sendRect: r(document.getElementById("sendBtn")), attachRect: r(document.getElementById("attachBtn")), queueRect: r(document.getElementById("queueBtn")),
     storageKeys: keys,
     storedForSession: sid ? localStorage.getItem("codexweb.composerHeight." + sid) : null,
@@ -488,9 +503,41 @@ checks["i_second_click_reuses_committed_500px"] = i3["height"] == "tall" and i3[
 # Bottom-aligned controls: in tall and full, send/attach/queue sit at the textarea bottom edge.
 def bottom_aligned(x):
     ta = x["textarea"]["bottom"]
-    return all(x[k] and x[k]["height"] > 0 and abs(x[k]["bottom"] - ta) <= 24 for k in ("sendRect", "attachRect"))
+    return all(x[k] and x[k]["height"] > 0 and abs(x[k]["bottom"] - ta) <= 24 for k in ("sendRect", "attachRect", "queueRect"))
 checks["tall_controls_bottom_aligned"] = bottom_aligned(c)
 checks["full_controls_bottom_aligned"] = bottom_aligned(d)
+# Grabber strip placement: a full-width strip (the form's content box, i.e. the
+# same edges as the input row, covering >= 95% of the form's border box), first
+# child of the form, above the textarea's top edge and outside the input row.
+def strip_ok(x):
+    s, f, t, row = x["expandRect"], x["formRect"], x["textarea"], x["inputRowRect"]
+    return bool(
+        x["expandVisible"] and s and f and row
+        and abs(s["left"] - row["left"]) <= 1 and abs(s["right"] - row["right"]) <= 1
+        and s["width"] >= 0.95 * f["width"]
+        and s["bottom"] <= t["top"] + 0.5 and s["height"] > 0
+        and x["expandParentIsForm"] and x["expandIsFirstFormChild"] and not x["expandInInputRow"]
+    )
+for label, x in (("normal", b), ("tall", c), ("full", d)):
+    checks[f"strip_{label}_spans_form_width_above_textarea_outside_input_row"] = strip_ok(x)
+checks["strip_is_a_row_resize_touch_none_drag_surface"] = b["expandCursor"] == "row-resize" and b["expandTouchAction"] == "none"
+checks["strip_pill_is_centered_and_narrow"] = bool(
+    b["pillRect"] and abs((b["pillRect"]["left"] + b["pillRect"]["right"]) / 2 - (b["expandRect"]["left"] + b["expandRect"]["right"]) / 2) <= 1.5
+    and 0 < b["pillRect"]["width"] <= 60 and 0 < b["pillRect"]["height"] <= 8
+)
+# Pill feedback: --border in normal, --accent in tall/full, back to --border after cycling to normal.
+checks["pill_normal_uses_border_color"] = b["pillBg"] == b["borderRgb"]
+checks["pill_tall_uses_accent_color"] = c["pillBg"] == c["accentRgb"] and c["pillBg"] != b["pillBg"]
+checks["pill_full_uses_accent_color"] = d["pillBg"] == d["accentRgb"] and d["pillBg"] != b["pillBg"]
+checks["pill_returns_to_border_color_in_normal"] = e["pillBg"] == e["borderRgb"]
+# The grabber must cost no horizontal space: the input row and .inputWrap keep
+# the same width when the draft crosses the overflow threshold (strip appears).
+checks["strip_appearing_does_not_shrink_input_wrap"] = (
+    a["expandVisible"] is False and b["expandVisible"] is True
+    and b["inputWrapRect"]["width"] >= a["inputWrapRect"]["width"] - 0.5
+    and abs(b["inputRowRect"]["width"] - a["inputRowRect"]["width"]) <= 0.5
+    and abs(b["textarea"]["width"] - a["textarea"]["width"]) <= 0.5
+)
 errors = json.loads((artifacts / "browser-errors.json").read_text(encoding="utf-8")).get("data", {}).get("errors", [])
 checks["no_page_errors"] = errors == []
 summary = {"pass": all(checks.values()), "checks": checks, "probes": p, "pageErrors": errors}
