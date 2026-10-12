@@ -503,16 +503,19 @@ function requireFunction(value, name) {
     const editSnoozeButtons = el("div", { class: "choiceChips", id: "editSnoozeButtons" });
     for (const [value, label] of [
       ["none", "No snooze"],
-      ["4h", "4 hours"],
+      ["evening", "This evening"],
       ["tomorrow", "Tomorrow"],
-      ["custom", "Custom"],
+      ["weekend", "This weekend"],
+      ["nextWeek", "Next week"],
+      ["custom", "Custom…"],
     ]) {
       const btn = el("button", {
         type: "button",
         class: "choiceChip",
         "data-snooze-mode": value,
-        text: label,
       });
+      btn.appendChild(el("span", { class: "chipLabel", text: label }));
+      btn.appendChild(el("span", { class: "chipTime" }));
       editSnoozeModeButtons.set(value, btn);
       editSnoozeButtons.appendChild(btn);
     }

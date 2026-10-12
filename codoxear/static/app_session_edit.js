@@ -1,3 +1,5 @@
+import * as CodoxearSnooze from "./app_snooze.js";
+
 const global = window;
 
 
@@ -73,16 +75,19 @@ const global = window;
     }
 
     function setEditSnoozeMode(mode) {
-      snoozeMode = ["none", "4h", "tomorrow", "custom"].includes(mode) ? mode : "none";
+      snoozeMode = ["none", "evening", "tomorrow", "weekend", "nextWeek", "custom"].includes(mode) ? mode : "none";
       for (const [value, button] of editSnoozeModeButtons.entries()) button.classList.toggle("active", value === snoozeMode);
       editSnoozeCustomRow.style.display = snoozeMode === "custom" ? "grid" : "none";
     }
 
-    function tomorrowSnoozeSeconds() {
-      const date = new Date(now());
-      date.setDate(date.getDate() + 1);
-      date.setHours(9, 0, 0, 0);
-      return Math.floor(date.getTime() / 1000);
+    function renderSnoozeChips(presets) {
+      for (const preset of presets) {
+        const button = editSnoozeModeButtons.get(preset.mode);
+        if (!button || !button.children || button.children.length < 2) continue;
+        const [label, time] = button.children;
+        if (label) label.textContent = preset.label;
+        if (time) time.textContent = preset.timeText ? `· ${preset.timeText}` : "";
+      }
     }
 
     function fillCustomSnoozeInputs(tsSeconds) {
@@ -140,13 +145,22 @@ const global = window;
       editNameInput.placeholder = sessionDisplayName(session) || "Conversation title";
       editPriorityRange.value = String(Number(session.priority_offset || 0));
       syncEditPriorityLabel();
-      const snoozeUntil = Number(session.snooze_until || 0);
-      if (snoozeUntil > now() / 1000) {
+      const currentNow = now();
+      const presets = CodoxearSnooze.resolveSnoozePresets(currentNow);
+      renderSnoozeChips(presets);
+      const snoozeUntil = Number(session.snooze_until);
+      const matchingPreset = Number.isFinite(snoozeUntil) && snoozeUntil > 0
+        ? presets.find((preset) => Math.floor(snoozeUntil) === preset.epoch)
+        : null;
+      if (matchingPreset) {
+        setEditSnoozeMode(matchingPreset.mode);
+        fillCustomSnoozeInputs(matchingPreset.epoch);
+      } else if (snoozeUntil > currentNow / 1000) {
         setEditSnoozeMode("custom");
         fillCustomSnoozeInputs(snoozeUntil);
       } else {
         setEditSnoozeMode("none");
-        fillCustomSnoozeInputs(tomorrowSnoozeSeconds());
+        fillCustomSnoozeInputs(CodoxearSnooze.snoozePresetEpoch("tomorrow", currentNow));
       }
       fillDependencyOptions(sid, session.dependency_session_id || "");
       prepareModalOpen();
@@ -159,15 +173,15 @@ const global = window;
       const sid = editSessionId;
       if (!sid || editSaveBtn.disabled) return;
       let snoozeUntil = null;
-      if (snoozeMode === "4h") snoozeUntil = Math.floor(now() / 1000) + 4 * 3600;
-      else if (snoozeMode === "tomorrow") snoozeUntil = tomorrowSnoozeSeconds();
-      else if (snoozeMode === "custom") {
+      if (snoozeMode === "custom") {
         const dateRaw = String(editSnoozeCustomDate.value || "").trim();
         const timeRaw = String(editSnoozeCustomTime.value || "").trim();
         if (!dateRaw || !timeRaw) { editStatus.textContent = "Choose both a custom date and time."; return; }
         const parsed = Date.parse(`${dateRaw}T${timeRaw}`);
         if (!Number.isFinite(parsed)) { editStatus.textContent = "Invalid snooze time."; return; }
         snoozeUntil = Math.floor(parsed / 1000);
+      } else if (snoozeMode !== "none") {
+        snoozeUntil = CodoxearSnooze.snoozePresetEpoch(snoozeMode, now());
       }
       try {
         editSaveBtn.disabled = true;
@@ -194,8 +208,8 @@ const global = window;
     editPriorityResetBtn.onclick = () => { editPriorityRange.value = "0"; syncEditPriorityLabel(); };
     for (const [mode, button] of editSnoozeModeButtons.entries()) button.onclick = () => {
       setEditSnoozeMode(mode);
-      if (mode === "tomorrow") fillCustomSnoozeInputs(tomorrowSnoozeSeconds());
-      else if (mode === "4h") fillCustomSnoozeInputs(Math.floor(now() / 1000) + 4 * 3600);
+      const presetEpoch = CodoxearSnooze.snoozePresetEpoch(mode, now());
+      if (presetEpoch !== null) fillCustomSnoozeInputs(presetEpoch);
     };
     editDependencyBtn.onclick = (event) => { event.preventDefault(); event.stopPropagation(); dependencyMenuOpen = !dependencyMenuOpen; applyMenus(); };
     editCloseBtn.onclick = () => hideEditSession();

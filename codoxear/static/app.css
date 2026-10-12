@@ -3342,6 +3342,15 @@ select {
         background: var(--ink);
         color: var(--paper);
       }
+      .choiceChip .chipTime:not(:empty) {
+        margin-left: var(--space-2);
+        font-size: var(--font-sm);
+        color: var(--muted);
+      }
+      .choiceChip.active .chipTime {
+        color: inherit;
+        opacity: 0.7;
+      }
       .subtleBtn {
         color: var(--muted);
       }

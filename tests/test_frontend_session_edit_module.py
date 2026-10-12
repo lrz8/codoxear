@@ -33,10 +33,13 @@ def eval_session_edit_lifecycle() -> dict:
         class ElementStub {{}}
         function makeNode() {{
           const listeners = {{}};
+          const classList = {{
+            toggles: [],
+            toggle(name, active) {{ this.toggles.push([name, Boolean(active)]); }},
+          }};
           return Object.assign(new ElementStub(), {{
             style: {{}}, dataset: {{}}, children: [], innerHTML: "", value: "", placeholder: "",
-            textContent: "", disabled: false, open: false, className: "",
-            classList: {{ toggle() {{}} }},
+            textContent: "", disabled: false, open: false, className: "", classList,
             setAttribute() {{}}, removeAttribute() {{}},
             appendChild(child) {{ this.children.push(child); return child; }},
             addEventListener(name, handler) {{ listeners[name] = handler; }},
@@ -53,7 +56,13 @@ def eval_session_edit_lifecycle() -> dict:
           for (const child of children) node.appendChild(child);
           return node;
         }}
-        function makeController({{ alias, selected = "session-1" }}) {{
+        function makeSnoozeButton() {{
+          const button = makeNode();
+          button.appendChild(makeNode());
+          button.appendChild(makeNode());
+          return button;
+        }}
+        function makeController({{ alias, snoozeUntil = 0, selected = "session-1" }}) {{
           const editCloseBtn = makeNode();
           const editStatus = makeNode();
           const editNameInput = makeNode();
@@ -68,11 +77,15 @@ def eval_session_edit_lifecycle() -> dict:
           const editSaveBtn = makeNode();
           const editCancelBtn = makeNode();
           const editViewer = makeNode();
-          const snoozeButtons = new Map([["none", makeNode()], ["4h", makeNode()], ["tomorrow", makeNode()], ["custom", makeNode()]]);
-          const session = {{ session_id: "session-1", alias, priority_offset: 0, snooze_until: 0, dependency_session_id: "", cwd: "/repo" }};
+          const snoozeButtons = new Map([
+            ["none", makeSnoozeButton()], ["evening", makeSnoozeButton()],
+            ["tomorrow", makeSnoozeButton()], ["weekend", makeSnoozeButton()],
+            ["nextWeek", makeSnoozeButton()], ["custom", makeSnoozeButton()],
+          ]);
+          const session = {{ session_id: "session-1", alias, priority_offset: 0, snooze_until: snoozeUntil, dependency_session_id: "", cwd: "/repo" }};
           const calls = [];
           const controller = ctx.window.CodoxearSessionEdit.createSessionEditController({{
-            documentTarget: {{ activeElement: makeNode() }}, ElementCtor: ElementStub, el, iconSvg: () => "",
+            documentTarget: {{ activeElement: makeNode() }}, ElementCtor: ElementStub, el,
             editCloseBtn, editStatus, editNameInput, editPriorityRange, editPriorityValue,
             editPriorityResetBtn, editSnoozeModeButtons: snoozeButtons, editSnoozeCustomDate,
             editSnoozeCustomTime, editSnoozeCustomRow, editDependencyBtn, editDependencyMenu,
@@ -86,7 +99,13 @@ def eval_session_edit_lifecycle() -> dict:
             prepareModalOpen: () => {{}}, afterModalVisibilityChanged: () => {{}}, positionDialogMenu: () => {{}},
             addAppEvent: () => {{}}, now: () => Date.UTC(2026, 0, 1, 12, 0, 0), HTMLElementCtor: ElementStub,
           }});
-          return {{ controller, editNameInput, editSaveBtn, editCancelBtn, editViewer, calls, alias: () => session.alias }};
+          return {{
+            controller, editNameInput, editSaveBtn, editCancelBtn, editViewer, calls,
+            snoozeButtons, editSnoozeCustomRow, alias: () => session.alias,
+          }};
+        }}
+        function active(button) {{
+          return button.classList.toggles.some(([name, value]) => name === "active" && value);
         }}
 
         const ctx = {{ window: {{}}, ElementStub }};
@@ -97,14 +116,37 @@ def eval_session_edit_lifecycle() -> dict:
         save.controller.openEditSession("session-1");
         save.editNameInput.value = "Renamed";
         save.editSaveBtn.onclick();
+
+        const evening = makeController({{ alias: "Original" }});
+        evening.controller.openEditSession("session-1");
+        evening.snoozeButtons.get("evening").onclick();
+        evening.editSaveBtn.onclick();
+
+        const cancel = makeController({{ alias: "Original" }});
+        cancel.controller.openEditSession("session-1");
+        cancel.editNameInput.value = "Discarded";
+        cancel.editCancelBtn.onclick();
+
+        const matching = makeController({{ alias: "Original", snoozeUntil: Date.UTC(2026, 0, 2, 9, 0, 0) / 1000 }});
+        matching.controller.openEditSession("session-1");
+        const custom = makeController({{ alias: "Original", snoozeUntil: Date.UTC(2026, 0, 3, 11, 0, 0) / 1000 }});
+        custom.controller.openEditSession("session-1");
+
         Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve()).then(() => {{
-          const cancel = makeController({{ alias: "Original" }});
-          cancel.controller.openEditSession("session-1");
-          cancel.editNameInput.value = "Discarded";
-          cancel.editCancelBtn.onclick();
           process.stdout.write(JSON.stringify({{
             save: {{ alias: save.alias(), closed: !save.editViewer.open, calls: save.calls }},
+            evening: {{ calls: evening.calls }},
             cancel: {{ alias: cancel.alias(), closed: !cancel.editViewer.open, calls: cancel.calls }},
+            recognition: {{
+              tomorrowActive: active(matching.snoozeButtons.get("tomorrow")),
+              matchingCustomRow: matching.editSnoozeCustomRow.style.display,
+              customActive: active(custom.snoozeButtons.get("custom")),
+              customRow: custom.editSnoozeCustomRow.style.display,
+            }},
+            chips: {{
+              eveningLabel: save.snoozeButtons.get("evening").children[0].textContent,
+              eveningTime: save.snoozeButtons.get("evening").children[1].textContent,
+            }},
           }}));
         }});
         """
@@ -113,12 +155,16 @@ def eval_session_edit_lifecycle() -> dict:
 
 
 class TestFrontendSessionEditModule(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.result = eval_session_edit_lifecycle()
+
     def test_save_commits_edited_title_and_refreshes_catalog_data(self) -> None:
-        result = eval_session_edit_lifecycle()
-        self.assertEqual(result["save"]["alias"], "Renamed")
-        self.assertTrue(result["save"]["closed"])
+        save = self.result["save"]
+        self.assertEqual(save["alias"], "Renamed")
+        self.assertTrue(save["closed"])
         self.assertEqual(
-            result["save"]["calls"][0],
+            save["calls"][0],
             {
                 "path": "/api/sessions/session-1/edit",
                 "body": {
@@ -129,13 +175,32 @@ class TestFrontendSessionEditModule(unittest.TestCase):
                 },
             },
         )
-        self.assertIn({"toast": "conversation updated"}, result["save"]["calls"])
+        self.assertIn({"toast": "conversation updated"}, save["calls"])
 
     def test_cancel_discards_draft_without_mutating_title(self) -> None:
-        result = eval_session_edit_lifecycle()
-        self.assertEqual(result["cancel"]["alias"], "Original")
-        self.assertTrue(result["cancel"]["closed"])
-        self.assertEqual(result["cancel"]["calls"], [])
+        cancel = self.result["cancel"]
+        self.assertEqual(cancel["alias"], "Original")
+        self.assertTrue(cancel["closed"])
+        self.assertEqual(cancel["calls"], [])
+
+    def test_evening_preset_saves_its_local_anchor_epoch(self) -> None:
+        self.assertEqual(
+            self.result["evening"]["calls"][0]["body"]["snooze_until"],
+            1767290400,
+        )
+
+    def test_reopens_matching_presets_and_uses_custom_for_other_future_times(self) -> None:
+        recognition = self.result["recognition"]
+        self.assertTrue(recognition["tomorrowActive"])
+        self.assertEqual(recognition["matchingCustomRow"], "none")
+        self.assertTrue(recognition["customActive"])
+        self.assertEqual(recognition["customRow"], "grid")
+
+    def test_open_rewrites_life_anchor_chip_labels_and_times(self) -> None:
+        self.assertEqual(
+            self.result["chips"],
+            {"eveningLabel": "This evening", "eveningTime": "· 6pm"},
+        )
 
 
 if __name__ == "__main__":
