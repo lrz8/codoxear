@@ -227,6 +227,7 @@ PROBE='(() => {
     topbar: r(tb), topbarVisible: Boolean(tb && getComputedStyle(tb).display !== "none" && tb.getBoundingClientRect().height > 0),
     interruptReachable,
     composer: r(c), textarea: r(t), expandRect: r(b),
+    sendRect: r(document.getElementById("sendBtn")), attachRect: r(document.getElementById("attachBtn")), queueRect: r(document.getElementById("queueBtn")),
     storageKeys: keys,
     storedForSession: sid ? localStorage.getItem("codexweb.composerHeight." + sid) : null,
     storedAll: Object.fromEntries(keys.map((k) => [k, localStorage.getItem(k)])),
@@ -384,6 +385,25 @@ shot 06-drag-full
 synthetic_drag "-20 -300 -9000"
 probe h4-drag-down-normal
 
+# i. preview isolation: a stored committed tall height (500) must survive an
+# aborted drag that previews other tall heights and lands on normal; after the
+# suppressed click, the next click re-enters tall at the committed 500px.
+browser eval "(() => { localStorage.setItem('codexweb.composerHeight.${SID_A}', JSON.stringify({mode:'tall',height:500})); return true; })()" --json > /dev/null 2>&1 || fail "could not seed committed tall height"
+browser reload > /dev/null 2>&1 || fail "reload before isolation probe failed"
+browser wait 3500 > /dev/null 2>&1
+select_session "$SID_A"
+browser fill '#msg' "$LONG_DRAFT" > /dev/null 2>&1 || fail "could not retype the long draft"
+settle
+probe i0-seeded-tall
+synthetic_drag "-100 -300 -9000"
+probe i1-aborted-drag-lands-normal
+browser eval '(() => { document.getElementById("expandBtn").click(); return true; })()' --json > /dev/null 2>&1 || fail "isolation click 1 failed"
+settle
+probe i2-first-click-suppressed
+browser eval '(() => { document.getElementById("expandBtn").click(); return true; })()' --json > /dev/null 2>&1 || fail "isolation click 2 failed"
+settle
+probe i3-second-click-reuses-committed
+
 browser errors --json > "$artifacts/browser-errors.json" 2>&1 || true
 browser console --json > "$artifacts/browser-console.json" 2>&1 || true
 capture_container_diagnostics
@@ -407,6 +427,7 @@ names = [
     "g1-before-send", "g2-after-send", "h0-normal-long-again", "h1-real-drag-up", "h1b-dragged-after-reload",
     "h2-synthetic-drag-down", "h2b-click-after-drag-suppressed", "h2c-next-click-cycles",
     "h3a-back-to-normal", "h3b-drag-past-full", "h4-drag-down-normal",
+    "i0-seeded-tall", "i1-aborted-drag-lands-normal", "i2-first-click-suppressed", "i3-second-click-reuses-committed",
 ]
 p = {n: load(n) for n in names}
 sid_a = (artifacts / "session-order.txt").read_text().split()[0]
@@ -459,6 +480,17 @@ checks = {
     "h_synthetic_drag_past_90_percent_snaps_full": h3a["height"] == "normal" and h3b["height"] == "full" and h3b["chatWrapDisplay"] == "none" and stored(h3b) == {"mode": "full"},
     "h_drag_down_from_full_snaps_normal": h4["height"] == "normal" and key_a not in h4["storageKeys"] and h4["chatWrapDisplay"] != "none",
 }
+i0, i1, i2, i3 = (p[n] for n in ["i0-seeded-tall", "i1-aborted-drag-lands-normal", "i2-first-click-suppressed", "i3-second-click-reuses-committed"])
+checks["i_seed_loads_committed_tall_500"] = i0["height"] == "tall" and i0["tallVar"] == "500px"
+checks["i_aborted_drag_lands_normal_keeps_committed_preference"] = i1["height"] == "normal"
+checks["i_first_click_after_abort_suppressed"] = i2["height"] == "normal"
+checks["i_second_click_reuses_committed_500px"] = i3["height"] == "tall" and i3["tallVar"] == "500px" and (json.loads(i3["storedAll"].get(key_a) or "null") == {"mode": "tall", "height": 500})
+# Bottom-aligned controls: in tall and full, send/attach/queue sit at the textarea bottom edge.
+def bottom_aligned(x):
+    ta = x["textarea"]["bottom"]
+    return all(x[k] and x[k]["height"] > 0 and abs(x[k]["bottom"] - ta) <= 24 for k in ("sendRect", "attachRect"))
+checks["tall_controls_bottom_aligned"] = bottom_aligned(c)
+checks["full_controls_bottom_aligned"] = bottom_aligned(d)
 errors = json.loads((artifacts / "browser-errors.json").read_text(encoding="utf-8")).get("data", {}).get("errors", [])
 checks["no_page_errors"] = errors == []
 summary = {"pass": all(checks.values()), "checks": checks, "probes": p, "pageErrors": errors}
