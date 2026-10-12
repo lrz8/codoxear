@@ -96,12 +96,16 @@ function requireFunction(value, name) {
     modelPicker.style.display = "none";
     const imgInput = el("input", { id: "imgInput", type: "file", multiple: "multiple", "data-hint-excluded": "hidden-file-input", style: "display:none" });
     const attachBtn = el("button", { class: "icon-btn", id: "attachBtn", type: "button", title: "Attach file", "aria-label": "Attach file", "data-hint": "a", html: iconSvg("paperclip") });
-    const expandBtn = el("button", { class: "icon-btn", id: "expandBtn", type: "button", title: "Expand composer", "aria-label": "Expand composer", "aria-pressed": "false", "data-hint": "j", html: iconSvg("expand") });
+    // Height-mode control is a grabber strip across the composer's top edge:
+    // it costs no horizontal space in the input row, and the strip is the
+    // honest affordance for the vertical drag it handles.
+    const expandBtn = el("button", { class: "composerGrab", id: "expandBtn", type: "button", title: "Expand composer", "aria-label": "Expand composer", "aria-pressed": "false", "data-hint": "j", style: "display:none", html: `<span class="composerGrabPill" aria-hidden="true"></span>` });
     const queueBtn = el("button", { class: "icon-btn", id: "queueBtn", type: "button", title: "Queued messages", "aria-label": "Queued messages", "data-hint": "q", html: iconSvg("queue") });
     const sendBtn = el("button", { class: "icon-btn primary", id: "sendBtn", type: "submit", title: "Send", "aria-label": "Send", "data-hint": "e", html: iconSvg("send") });
     const form = el("form", {}, [
+      expandBtn,
       stagedTray,
-      el("div", { class: "composerInputRow" }, [attachBtn, expandBtn, el("div", { class: "inputWrap" }, [textarea, msgPh]), queueBtn, sendBtn]),
+      el("div", { class: "composerInputRow" }, [attachBtn, el("div", { class: "inputWrap" }, [textarea, msgPh]), queueBtn, sendBtn]),
       modelPicker,
       imgInput,
     ]);

@@ -95,7 +95,7 @@ PRELUDE = textwrap.dedent(
       const controller = ctx.window.CodoxearComposer.createComposerController({{
         form, textarea, msgPh: node(), sendBtn: node(), sendChoice: node(), sendChoiceBackdrop: node(),
         sendChoiceNowBtn, sendChoiceLaterBtn, sendChoiceCancelBtn: node(),
-        composer, expandBtn, iconSvg: (name) => `icon:${{name}}`,
+        composer, expandBtn,
         measureTextareaHeight: () => textareaHeight,
         getAppHeight: () => appHeight,
         sessionCatalog, sessionLaunchFailed: () => false, sessionState,
@@ -115,7 +115,6 @@ PRELUDE = textwrap.dedent(
       const snapshot = () => ({{
         mode: composer.dataset.height,
         display: expandBtn.style.display,
-        icon: expandBtn.innerHTML,
         pressed: expandBtn.attrs["aria-pressed"],
         label: expandBtn.attrs["aria-label"],
         expanded: expandBtn.classList.contains("expanded"),
@@ -192,23 +191,23 @@ def test_click_cycles_normal_tall_full_normal_and_persists_each_step() -> None:
         """
     )
     assert result["normal"]["mode"] == "normal" and result["normal"]["inlineHeight"] == "180px"
-    assert result["normal"]["icon"] == "icon:expand" and result["normal"]["pressed"] == "false"
+    assert result["normal"]["pressed"] == "false" and result["normal"]["expanded"] is False
     assert result["normal"]["label"] == "Expand composer"
 
     tall = result["tall"]
     assert tall["mode"] == "tall" and tall["inlineHeight"] == "" and tall["inlineOverflow"] == ""
     assert tall["stored"] == '{"mode":"tall"}' and tall["tallVar"] is None
-    assert tall["pressed"] == "true" and tall["expanded"] is True and tall["icon"] == "icon:expand"
+    assert tall["pressed"] == "true" and tall["expanded"] is True
     assert tall["label"] == "Expand composer fully" and tall["display"] == ""
     assert result["tallTyped"]["inlineHeight"] == "" and result["tallTyped"]["inlineOverflow"] == ""
 
     full = result["full"]
     assert full["mode"] == "full" and full["stored"] == '{"mode":"full"}'
-    assert full["icon"] == "icon:collapse" and full["label"] == "Restore composer height"
+    assert full["label"] == "Restore composer height" and full["expanded"] is True
     assert full["inlineHeight"] == "" and full["inlineOverflow"] == ""
 
     back = result["back"]
-    assert back["mode"] == "normal" and back["stored"] is None and back["icon"] == "icon:expand"
+    assert back["mode"] == "normal" and back["stored"] is None
     assert back["expanded"] is False and back["pressed"] == "false"
     # Normal mode re-derives the auto-grow styles and keeps the button for the overflowing draft.
     assert back["inlineHeight"] == "180px" and back["display"] == ""
@@ -232,7 +231,7 @@ def test_stored_mode_is_applied_at_construction_and_when_the_session_is_selected
         """
     )
     assert result["atConstruction"]["mode"] == "tall" and result["atConstruction"]["tallVar"] == "432px"
-    assert result["other"]["mode"] == "full" and result["other"]["icon"] == "icon:collapse"
+    assert result["other"]["mode"] == "full" and result["other"]["expanded"] is True
     assert result["backToSid"]["mode"] == "tall" and result["backToSid"]["tallVar"] == "432px"
     # Loading is a read: it never rewrites storage.
     assert result["writes"] == []

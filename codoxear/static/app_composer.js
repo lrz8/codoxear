@@ -50,7 +50,6 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
     // composer stays permanently in normal auto-grow mode.
     const composerEl = options.composer && typeof options.composer === "object" && options.composer.dataset ? options.composer : null;
     const expandBtn = options.expandBtn && typeof options.expandBtn.addEventListener === "function" ? options.expandBtn : null;
-    const iconSvg = typeof options.iconSvg === "function" ? options.iconSvg : () => "";
     // Browser-dependent measurement seams (real-browser defaults).
     const measureTextareaHeight = typeof options.measureTextareaHeight === "function" ? options.measureTextareaHeight : () => textarea.getBoundingClientRect().height;
     const getAppHeight = typeof options.getAppHeight === "function" ? options.getAppHeight : () => {
@@ -87,7 +86,6 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
     let tallHeightPx = null;
     let normalOverflow = false;
     let heightDragActive = false;
-    let renderedExpandIcon = "";
     let sendChoicePending = null;
     let sendChoiceReturnFocusEl = null;
     let modelPickerOpen = false;
@@ -630,11 +628,6 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       if (!expandBtn) return;
       const expanded = heightMode !== "normal";
       expandBtn.style.display = expanded || normalOverflow || heightDragActive ? "" : "none";
-      const iconName = heightMode === "full" ? "collapse" : "expand";
-      if (iconName !== renderedExpandIcon) {
-        renderedExpandIcon = iconName;
-        expandBtn.innerHTML = iconSvg(iconName);
-      }
       expandBtn.classList.toggle("expanded", expanded);
       const label = heightMode === "normal" ? "Expand composer" : heightMode === "tall" ? "Expand composer fully" : "Restore composer height";
       expandBtn.title = label;

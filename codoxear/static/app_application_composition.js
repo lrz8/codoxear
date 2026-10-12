@@ -1181,7 +1181,6 @@ import * as CodoxearWiring from "./app_wiring.js";
           modelPicker,
           composer,
           expandBtn,
-          iconSvg,
           sendBtn,
           sendChoice,
           sendChoiceBackdrop,

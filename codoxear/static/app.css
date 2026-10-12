@@ -2207,12 +2207,33 @@ select {
       .main:has(> .composer[data-height="full"]) .chatWrap {
         display: none;
       }
-      /* The expand button doubles as a vertical drag handle. */
-      #expandBtn {
+      /* The height-mode control is a grabber strip across the composer's top
+         edge: zero horizontal cost in the input row, and the strip is the
+         honest affordance for the vertical drag it handles. The controller
+         (app_composer.js) owns its visibility and the expanded state. */
+      .composerGrab {
+        flex: 0 0 auto;
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        min-height: 0;
+        border: 0;
+        background: transparent;
+        padding: 9px 0 7px;
+        cursor: row-resize;
         touch-action: none;
       }
-      .composer .icon-btn.expanded {
-        color: var(--accent);
+      .composerGrabPill {
+        width: 36px;
+        height: 4px;
+        border-radius: var(--radius-pill);
+        background: var(--border);
+      }
+      .composerGrab:hover .composerGrabPill {
+        background: var(--muted);
+      }
+      .composerGrab.expanded .composerGrabPill {
+        background: var(--accent);
       }
       .composer button {
         flex: 0 0 auto;
