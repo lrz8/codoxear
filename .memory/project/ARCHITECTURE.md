@@ -182,3 +182,18 @@ register lifecycle listeners, but must not call runtime action methods at
 load time. Command registration and runtime queries are deferred until
 `session_start`/`session_switch`; a failed registration retries from a
 later lifecycle event.
+
+### Offline cold-load authority
+The canonical SW cache/readiness contract is in AGENTS.md. Activation must warm the uncontrolled first navigation's shell and versioned dependencies; runtime fetch caching alone requires an extra visit. `/api/me` is boot-only: when activation precedes authentication, successful login must refresh it after best-effort worker readiness, otherwise an authenticated UI can render online yet have no cached auth snapshot for offline boot. Theme links are generated dynamically, so the SW warms its explicit family list at the shared asset version; the behavioral activation test pins the list against actual theme files. Transcript caches remain populated only by opening sessions online.
+
+## Deployment runtime resolution (verified 2026-10-10)
+
+The pipx venv (`~/.local/share/pipx/venvs/codoxear`) supplies only the interpreter and dependencies at runtime. The service's `WorkingDirectory=~/.local/share/codoxear/deploy` plus `python -m codoxear.server` puts the deploy worktree first on `sys.path`, so all code and static assets (including `STATIC_DIR` and `dist/app.bundle.js`) resolve from the worktree, not site-packages. setuptools package-data deliberately excludes `static/dist/*`, so the installed package never contains the bundle — checking site-packages for served assets is a dead end; check the deploy worktree (`/proc/<MainPID>/cwd`) instead.
+
+## Frontend commits must carry the rebuilt bundle
+
+`dist/app.bundle.js` is tracked, and the Docker verify harnesses serve the
+committed bundle without rebuilding it. A frontend commit that updates ESM
+sources but not the bundle makes behavioral verification test the previous
+UI. Rebuild with deploy.sh's exact invocation before committing:
+`npx esbuild codoxear/static/app.js --bundle --minify --outfile=codoxear/static/dist/app.bundle.js --format=esm`.
