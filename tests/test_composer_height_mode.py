@@ -361,6 +361,45 @@ def test_drag_resizes_continuously_with_snap_gravity_and_suppresses_the_click() 
     assert result["cancelNextClick"]["mode"] == "full"
 
 
+def test_drag_previews_do_not_pollute_the_committed_tall_height() -> None:
+    result = run_scenario(
+        """
+        // Stored committed preference: tall at 500px. The textarea currently
+        // renders at 500px (textareaHeight), app height 1000px.
+        const h = harness({
+          stored: { "codexweb.composerHeight.sid": '{"mode":"tall","height":500}' },
+          textareaHeight: 500,
+        });
+        const before = h.snapshot();
+        // Drag up: preview passes through tall heights (700px live var) without
+        // committing storage or the preference.
+        h.expandBtn.emit("pointerdown", pointer(500));
+        h.expandBtn.emit("pointermove", pointer(300));
+        const previewTall = h.snapshot();
+        // Drag back down past the normal snap threshold and release: aborted.
+        h.expandBtn.emit("pointermove", pointer(900));
+        const previewNormal = h.snapshot();
+        h.expandBtn.emit("pointerup", pointer(900));
+        const afterAbort = h.snapshot();
+        h.expandBtn.emit("click");  // post-drag click is suppressed
+        h.expandBtn.emit("click");  // genuine click cycles normal -> tall
+        const cycleTall = h.snapshot();
+        process.stdout.write(JSON.stringify({ before, previewTall, previewNormal, afterAbort, cycleTall }));
+        """
+    )
+    assert result["before"]["mode"] == "tall" and result["before"]["tallVar"] == "500px"
+    # Preview renders the live height but writes nothing to storage.
+    assert result["previewTall"]["mode"] == "tall" and result["previewTall"]["tallVar"] == "700px"
+    assert result["previewTall"]["stored"] == '{"mode":"tall","height":500}'
+    assert result["previewNormal"]["mode"] == "normal"
+    # The aborted gesture ends in normal and clears the stored mode.
+    assert result["afterAbort"]["mode"] == "normal" and result["afterAbort"]["stored"] is None
+    # The next cycle's tall stop reuses the committed 500px preference, not a
+    # preview value left over from the aborted drag.
+    assert result["cycleTall"]["mode"] == "tall" and result["cycleTall"]["tallVar"] == "500px"
+    assert result["cycleTall"]["stored"] == '{"mode":"tall","height":500}'
+
+
 def test_invalid_stored_values_fall_back_to_normal() -> None:
     result = run_scenario(
         """

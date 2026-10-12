@@ -2170,6 +2170,13 @@ select {
         max-height: calc(var(--appH, 100dvh) - 140px);
         overflow-y: auto;
       }
+      /* In tall/full the row is much taller than the controls; keep the
+         controls adjacent to the end of the draft instead of floating at
+         the vertical middle. */
+      .composer[data-height="tall"] .composerInputRow,
+      .composer[data-height="full"] .composerInputRow {
+        align-items: flex-end;
+      }
       .composer[data-height="full"] {
         flex: 1 1 auto;
         min-height: 0;

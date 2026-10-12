@@ -674,18 +674,25 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       else storageSetItem(heightModeKey(sessionId), JSON.stringify(heightMode === "tall" && tallHeightPx != null ? { mode: "tall", height: tallHeightPx } : { mode: heightMode }));
     }
 
-    function applyHeightMode(mode, { persist = true, height } = {}) {
+    function applyHeightMode(mode, { persist = true, height, preview = false } = {}) {
       if (composerEl) {
         heightMode = mode;
-        if (mode === "tall" && Number.isFinite(height)) tallHeightPx = Math.round(height);
         composerEl.dataset.height = mode;
-        if (tallHeightPx != null) composerEl.style.setProperty("--composer-tall-h", `${tallHeightPx}px`);
-        else composerEl.style.removeProperty("--composer-tall-h");
+        if (preview) {
+          // Drag previews write the live height to the CSS var only; the
+          // committed tall preference changes when a gesture ends in tall, so
+          // an aborted drag cannot pollute the height a later click reuses.
+          if (mode === "tall" && Number.isFinite(height)) composerEl.style.setProperty("--composer-tall-h", `${Math.round(height)}px`);
+        } else {
+          if (mode === "tall" && Number.isFinite(height)) tallHeightPx = Math.round(height);
+          if (tallHeightPx != null) composerEl.style.setProperty("--composer-tall-h", `${tallHeightPx}px`);
+          else composerEl.style.removeProperty("--composer-tall-h");
+          if (persist) persistHeightMode();
+        }
         if (mode !== "normal") {
           textarea.style.height = "";
           textarea.style.overflowY = "";
         }
-        if (persist) persistHeightMode();
       }
       autoGrow();
     }
@@ -710,7 +717,8 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       const basePx = parseFloat(getComputedStyleFn(textarea).minHeight || "0") || 32;
       const target = Math.min(Math.max(targetPx, basePx), appHeight);
       const mode = target < NORMAL_SNAP_FACTOR * normalCap() ? "normal" : target > FULL_SNAP_FACTOR * appHeight ? "full" : "tall";
-      applyHeightMode(mode, { persist: false, height: target });
+      applyHeightMode(mode, { persist: false, height: target, preview: true });
+      return target;
     }
 
     function bindExpandButton() {
@@ -733,7 +741,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
           heightDragActive = true;
         }
         if (typeof event.preventDefault === "function") event.preventDefault();
-        previewHeightDrag(gesture.startHeight - dy);
+        gesture.lastTargetPx = previewHeightDrag(gesture.startHeight - dy);
       });
       // A browser fires `click` after a pointerup but never after a
       // pointercancel, so only pointerup arms the click suppression.
@@ -741,11 +749,16 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
         if (!gesture) return;
         try { if (event && event.pointerId != null) expandBtn.releasePointerCapture(event.pointerId); } catch (_) {}
         const wasDrag = gesture.dragging;
+        const lastTargetPx = gesture.lastTargetPx;
         gesture = null;
         if (!wasDrag) return;
         heightDragActive = false;
         suppressClick = suppress;
-        applyHeightMode(heightMode);
+        // A gesture ending in tall commits the previewed height as the
+        // session's tall preference; any other landing mode keeps the
+        // previously committed preference untouched.
+        if (heightMode === "tall" && Number.isFinite(lastTargetPx)) applyHeightMode("tall", { height: lastTargetPx });
+        else applyHeightMode(heightMode);
       };
       listen(expandBtn, "pointerup", (event) => finishGesture(event, { suppress: true }));
       listen(expandBtn, "pointercancel", (event) => finishGesture(event, { suppress: false }));
