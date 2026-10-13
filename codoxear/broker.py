@@ -805,6 +805,13 @@ class Broker:
             except OSError:
                 break
 
+    def _mark_idle_if_quiet(self) -> None:
+        now_ts = _now()
+        with self._lock:
+            st = self.state
+            if st and _should_clear_busy_state(st, now_ts):
+                _mark_busy_state_idle(st, now_ts)
+
     def _log_watcher(self) -> None:
         while not self._stop.is_set():
             with self._lock:
@@ -815,6 +822,11 @@ class Broker:
                     log_path = st.log_path
                     off = st.log_off
             if not st or not st.log_path:
+                # No session log is bound yet (a fresh Pi session creates its log
+                # at the first assistant row). A send the backend swallowed leaves
+                # the latch with no log or PTY activity to re-evaluate it, so the
+                # sweep runs on the timer here too.
+                self._mark_idle_if_quiet()
                 time.sleep(0.25)
                 continue
 
@@ -833,13 +845,6 @@ class Broker:
                     except Exception:
                         break
 
-            def maybe_mark_idle() -> None:
-                now_ts = _now()
-                with self._lock:
-                    st3 = self.state
-                    if st3 and _should_clear_busy_state(st3, now_ts):
-                        _mark_busy_state_idle(st3, now_ts)
-
             def maybe_clear_resume_delivery_mute() -> None:
                 clear_meta = False
                 with self._lock:
@@ -856,7 +861,7 @@ class Broker:
                 continue
 
             if new_off == off:
-                maybe_mark_idle()
+                self._mark_idle_if_quiet()
                 maybe_clear_resume_delivery_mute()
                 maybe_drain_one_if_idle()
                 time.sleep(0.25)
@@ -869,7 +874,7 @@ class Broker:
                 _apply_log_objects_to_state(st2, objs, now=_now)
                 st2.log_off = new_off
 
-            maybe_mark_idle()
+            self._mark_idle_if_quiet()
             maybe_clear_resume_delivery_mute()
             maybe_drain_one_if_idle()
 
