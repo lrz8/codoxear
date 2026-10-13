@@ -773,6 +773,66 @@ import * as CodoxearUrls from "./app_application.js";
     cjkEmphasisRegistered = true;
   }
 
+  // marked's GFM extended autolink scans a URL candidate to the first
+  // whitespace or `<` and trims only ASCII trailing punctuation, so a bare URL
+  // followed directly by prose punctuation becomes one anchor with the prose:
+  // `…/dexgem-strategy（私有，jackw1997 邀请已发）` links every character up to
+  // the next space. CJK prose has no inter-word spaces, so the scan never sees a
+  // boundary — cmark-gfm/GitHub renders the same HTML, and this is the common
+  // case for agent output, not an edge case. An autolink instead ends at the
+  // first non-ASCII punctuation or symbol. Non-ASCII letters and digits never
+  // terminate, so CJK paths and query values (`…/wiki/中文`, `?wd=萧山`) keep
+  // working, percent-encoded forms (`%EF%BC%88`) are untouched, and ASCII URL
+  // punctuation stays governed by marked's own rules.
+  //
+  // This is an inline *extension*, not a `use({tokenizer})` override: marked
+  // tries extension tokenizers ahead of the built-ins and reads their
+  // `undefined` as "defer", while a `use({tokenizer})` override returning
+  // `undefined` suppresses the built-in entirely (`false` is its fall-through
+  // signal), which would force reimplementing marked's URL body. The truncated
+  // candidate goes back through that body, so GFM's trailing-punctuation
+  // trimming stays marked's.
+  const PROSE_BOUNDARY_RE = /[\p{P}\p{S}]/u;
+
+  function firstProseBoundaryIndex(source) {
+    for (let i = 0; i < source.length;) {
+      const code = source.codePointAt(i);
+      const size = code > 0xffff ? 2 : 1;
+      if (code > 0x7f && PROSE_BOUNDARY_RE.test(source.slice(i, i + size))) return i;
+      i += size;
+    }
+    return -1;
+  }
+
+  function tokenizeCjkUrlBoundary(src) {
+    const tokenizer = this.lexer && this.lexer.tokenizer;
+    const rule = tokenizer && tokenizer.rules && tokenizer.rules.inline && tokenizer.rules.inline.url;
+    if (typeof rule?.exec !== "function") return undefined;
+    const match = rule.exec(src);
+    // `url` also owns marked's email branch (the `@` capture); an email
+    // autolink already stops at CJK punctuation, so defer that branch as-is.
+    if (!match || match[2] === "@") return undefined;
+    const cut = firstProseBoundaryIndex(match[0]);
+    if (cut < 0) return undefined;
+    return tokenizer.url(match[0].slice(0, cut)) || undefined;
+  }
+
+  let cjkUrlBoundaryRegistered = false;
+  function ensureCjkUrlBoundary() {
+    if (cjkUrlBoundaryRegistered) return;
+    if (!window.marked || typeof window.marked.use !== "function") return;
+    window.marked.use({
+      extensions: [
+        {
+          name: "cjkUrlBoundary",
+          level: "inline",
+          tokenizer: tokenizeCjkUrlBoundary,
+        },
+      ],
+    });
+    cjkUrlBoundaryRegistered = true;
+  }
+
   // marked v15's del rule accepts a run of one OR two tildes per side
   // (`~~?...~~?` with a backreference), so a sentence like
   // `100~300°/s ... **~50 像素**` pairs two unrelated approximation/range
@@ -806,13 +866,14 @@ import * as CodoxearUrls from "./app_application.js";
   function mdToHtml(src, options = null) {
     if (!window.marked || typeof window.marked.parse !== "function") throw new Error("marked failed to load");
     ensureCjkEmphasisExtension();
+    ensureCjkUrlBoundary();
     ensureGfmStrikethrough();
     const mathStore = [];
     const prepared = extractMathFromText(rewriteOaiMemCitations(String(src ?? "").replaceAll("\r\n", "\n")), mathStore);
     // breaks: true preserves single newlines from the raw text as line
     // breaks — agent messages are plain-text-first, not print-style prose.
-    // The CJK emphasis rescue and the GFM-strict strikethrough override are
-    // registered lazily and idempotently above.
+    // The CJK emphasis rescue, the CJK autolink boundary, and the GFM-strict
+    // strikethrough override are registered lazily and idempotently above.
     return substituteMath(postProcessMarkedHtml(window.marked.parse(prepared, { breaks: true }), options), mathStore);
   }
 
