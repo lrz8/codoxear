@@ -527,8 +527,11 @@ const global = window;
       function parseLocalFileRef(rawValue) {
         return CodoxearMarkdown.parseLocalFileRef(rawValue);
       }
-      function isMarkdownPreviewable(path) {
-        return CodoxearMarkdown.isMarkdownPreviewable(path);
+      function isPreviewableFilePath(path) {
+        return CodoxearFileHelpers.isPreviewableFilePath(path);
+      }
+      function isPreviewableFileKind(kind) {
+        return CodoxearFileHelpers.isPreviewableFileKind(kind);
       }
       function markdownPreviewHtml(src, options = {}) {
         return CodoxearMarkdown.markdownPreviewHtml(src, options);
@@ -618,7 +621,7 @@ const global = window;
         dataTransferHasFiles, extractFilesFromClipboardData, extractFilesFromDropData, safeAttachmentStem,
         isLikelyHeic, looksLikeImage, b64FromBytes, codoxearFilePicker: CodoxearFilePicker, codoxearFileViewer: CodoxearFileViewer,
         codoxearFileEditor: CodoxearFileEditor, normalizeLineNumber, parseLocalFileRef,
-        isMarkdownPreviewable, markdownPreviewHtml, chatMarkdownHtmlCached, iconSvg,
+        isPreviewableFilePath, isPreviewableFileKind, markdownPreviewHtml, chatMarkdownHtmlCached, iconSvg,
         cleanupActiveApp, renderLogin,
         setActiveAppCleanup: (cleanup) => { activeAppCleanup = cleanup; },
         clearActiveAppCleanup: (cleanup) => { if (activeAppCleanup === cleanup) activeAppCleanup = null; },

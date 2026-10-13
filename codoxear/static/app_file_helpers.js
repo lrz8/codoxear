@@ -52,12 +52,39 @@ function listFromFilesField(val) {
     return raw;
   }
 
+  // Document previewability has two sources by design: the server reports the
+  // authoritative `kind` for a loaded file (see codoxear/file_text.py
+  // document_kind), while the viewer needs the same answer BEFORE a load in
+  // order to pick an opening mode and to reveal the preview control. The
+  // extension sets below are the client half of that contract and are pinned
+  // against the Python sets by tests/test_file_preview_default.py.
+  const MARKDOWN_EXTENSIONS = Object.freeze(["md", "markdown", "mdown", "mkd"]);
+  const HTML_EXTENSIONS = Object.freeze(["html", "htm"]);
+
+  function fileExtensionLower(path) {
+    const last = String(path || "").split("/").pop() || "";
+    const idx = last.lastIndexOf(".");
+    if (idx <= 0 || idx === last.length - 1) return "";
+    return last.slice(idx + 1).toLowerCase();
+  }
+
   function isTextFileKind(kind) {
-    return kind === "text" || kind === "markdown";
+    return kind === "text" || isPreviewableFileKind(kind);
   }
 
   function isDiffableFileKind(kind) {
     return isTextFileKind(kind);
+  }
+
+  // Previewable documents render a non-source surface: markdown through the
+  // markdown renderer, html in a sandboxed frame.
+  function isPreviewableFileKind(kind) {
+    return kind === "markdown" || kind === "html";
+  }
+
+  function isPreviewableFilePath(path) {
+    const ext = fileExtensionLower(path);
+    return MARKDOWN_EXTENSIONS.includes(ext) || HTML_EXTENSIONS.includes(ext);
   }
 
   function blockedFileMessage(rel, reason, viewerMaxBytes, size) {
@@ -417,4 +444,4 @@ function listFromFilesField(val) {
     return btoaFunc(bin);
   }
 
-export { listFromFilesField, listFromFileRecords, stripPathLocationSuffix, isTextFileKind, isDiffableFileKind, blockedFileMessage, formatPriorityOffset, fileVideoPreviewErrorText, fileSearchScore, normalizeDraftFilePath, filePickerFoldedSearchText, filePickerOriginalRangeForFolded, filePickerMatchRanges, filePickerMatchRangesForQuery, filePickerCandidateScore, compareFilePickerEntries, normalizeFileCandidateSource, filePickerSectionLabel, duplicateFilePickerPaths, rawByteDuplicatePaths, filePickerIdentityHint, filePickerTitle, positionAfterInsertedText, fileEditorDeleteCommandForKey, dataTransferHasFiles, extractFilesFromClipboardData, extractFilesFromDropData, attachmentSafeStem, attachmentExtensionLower, attachmentIsLikelyHeic, attachmentLooksLikeImage, bytesToBase64 };
+export { listFromFilesField, listFromFileRecords, stripPathLocationSuffix, isTextFileKind, isDiffableFileKind, isPreviewableFileKind, isPreviewableFilePath, MARKDOWN_EXTENSIONS, HTML_EXTENSIONS, blockedFileMessage, formatPriorityOffset, fileVideoPreviewErrorText, fileSearchScore, normalizeDraftFilePath, filePickerFoldedSearchText, filePickerOriginalRangeForFolded, filePickerMatchRanges, filePickerMatchRangesForQuery, filePickerCandidateScore, compareFilePickerEntries, normalizeFileCandidateSource, filePickerSectionLabel, duplicateFilePickerPaths, rawByteDuplicatePaths, filePickerIdentityHint, filePickerTitle, positionAfterInsertedText, fileEditorDeleteCommandForKey, dataTransferHasFiles, extractFilesFromClipboardData, extractFilesFromDropData, attachmentSafeStem, attachmentExtensionLower, attachmentIsLikelyHeic, attachmentLooksLikeImage, bytesToBase64 };

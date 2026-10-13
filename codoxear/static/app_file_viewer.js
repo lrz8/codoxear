@@ -310,6 +310,27 @@ function requireFunction(value, name) {
       return preview;
     }
 
+    // HTML documents render from a real same-origin file URL rather than an
+    // srcdoc string, so the browser resolves the document's own relative
+    // subresources (img/src, stylesheet href, CSS url()) against its actual
+    // directory. The frame is sandboxed WITHOUT allow-scripts: the route serves
+    // documents from the session cwd on this authenticated single-user origin,
+    // so script execution would hand a repo file the app's own API. The route
+    // additionally sends `Content-Security-Policy: sandbox allow-same-origin`
+    // so the same guarantee holds for a direct navigation to that URL.
+    function renderHtmlDocument(rel, previewUrl) {
+      host.innerHTML = "";
+      const frame = el("iframe", {
+        class: "fileHtmlPreview",
+        src: String(previewUrl || ""),
+        sandbox: "allow-same-origin",
+        referrerpolicy: "no-referrer",
+        title: `Preview of ${String(rel || "document")}`,
+      });
+      host.appendChild(frame);
+      return frame;
+    }
+
     function applicationDeps() {
       return {
         disposeFileEditor: requireFunction(options.disposeFileEditor, "disposeFileEditor"),
@@ -358,6 +379,20 @@ function requireFunction(value, name) {
       return result;
     }
 
+    function applyHtmlDocument(rel, previewUrl) {
+      const deps = applicationDeps();
+      prepareFallbackSurface(deps);
+      const result = renderHtmlDocument(rel, previewUrl);
+      deps.updateFileTouchToolbar();
+      return result;
+    }
+
+    function applyFilePreview(rel, text, preview = {}) {
+      const kind = String((preview && preview.kind) || "markdown");
+      if (kind === "html") return applyHtmlDocument(rel, String((preview && preview.url) || ""));
+      return applyMarkdown(rel, text);
+    }
+
     function applyBlocked(rel, reason, viewerMaxBytes, size) {
       const deps = applicationDeps();
       prepareFallbackSurface(deps);
@@ -366,7 +401,7 @@ function requireFunction(value, name) {
       return result;
     }
 
-    return Object.freeze({ applyBlocked, applyDownload, applyMarkdown, applyPlainText, renderBlocked, renderDownload, renderMarkdown, renderPlainText });
+    return Object.freeze({ applyBlocked, applyDownload, applyFilePreview, applyHtmlDocument, applyMarkdown, applyPlainText, renderBlocked, renderDownload, renderHtmlDocument, renderMarkdown, renderPlainText });
   }
 
   function createFileLoadResultRuntime(options = {}) {
@@ -381,7 +416,7 @@ function requireFunction(value, name) {
     const disposeFileEditor = requireFunction(options.disposeFileEditor, "disposeFileEditor");
     const renderMonacoDiff = requireFunction(options.renderMonacoDiff, "renderMonacoDiff");
     const renderMonacoFile = requireFunction(options.renderMonacoFile, "renderMonacoFile");
-    const renderMarkdownPreview = requireFunction(options.renderMarkdownPreview, "renderMarkdownPreview");
+    const renderFilePreview = requireFunction(options.renderFilePreview, "renderFilePreview");
     const renderBlockedFileNotice = requireFunction(options.renderBlockedFileNotice, "renderBlockedFileNotice");
     const renderPdfFile = requireFunction(options.renderPdfFile, "renderPdfFile");
     const showImage = requireFunction(options.showImage, "showImage");
@@ -435,7 +470,8 @@ function requireFunction(value, name) {
       }
       if (loadPlan.kind === "text") {
         if (loadPlan.renderPreview) {
-          renderMarkdownPreview(rel, loadPlan.text);
+          const previewUrl = loadPlan.previewUrl ? resolveAppUrl(loadPlan.previewUrl) : "";
+          renderFilePreview(rel, loadPlan.text, { kind: loadPlan.previewKind, url: previewUrl });
         } else {
           const rendered = await renderMonacoFile(rel, loadPlan.text, request.line, "", request);
           if (!rendered || !isCurrentFileOpenRequest(request)) return false;
@@ -817,6 +853,13 @@ function requireFunction(value, name) {
       return true;
     }
 
+    // A line-targeted reference (`doc.md:120`) asks for a specific line, which
+    // only source view can show. A plain reference passes no mode, so the
+    // viewer applies its per-kind default (preview for previewable documents).
+    function referenceOpenMode(line) {
+      return line ? "file" : "";
+    }
+
     async function openReference(ref) {
       if (!ref || typeof ref.path !== "string") return false;
       const rawPath = String(ref.path ?? "");
@@ -834,16 +877,16 @@ function requireFunction(value, name) {
           setToast("select a session first");
           return false;
         }
-        await showFileViewer({ path: parsed.path, mode: "file", manual: false, line });
+        await showFileViewer({ path: parsed.path, mode: referenceOpenMode(line), manual: false, line });
         return true;
       }
       if (sessionState.get("selected")) {
-        await showFileViewer({ path: parsed.path, mode: "file", manual: false, line });
+        await showFileViewer({ path: parsed.path, mode: referenceOpenMode(line), manual: false, line });
         return true;
       }
       const currentRel = sessionRelativePath(parsed.path);
       if (currentRel) {
-        await showFileViewer({ path: currentRel, mode: "file", manual: false, line });
+        await showFileViewer({ path: currentRel, mode: referenceOpenMode(line), manual: false, line });
         return true;
       }
       const sessions = requireFunction(options.sessions, "sessions")();
@@ -858,7 +901,7 @@ function requireFunction(value, name) {
       await requireFunction(options.selectSession, "selectSession")(match.session_id);
       const matchRoot = String(match.cwd || "").replace(/\/+$/, "");
       const rel = parsed.path === matchRoot ? "." : parsed.path.slice(matchRoot.length + 1);
-      await showFileViewer({ path: rel, mode: "file", manual: false, line });
+      await showFileViewer({ path: rel, mode: referenceOpenMode(line), manual: false, line });
       return true;
     }
 

@@ -385,7 +385,7 @@ import * as CodoxearSessionEdit from "./app_session_edit.js";
       editPriorityResetBtn, editPriorityValue, editSaveBtn, editSnoozeCustomDate,
       editSnoozeCustomRow, editSnoozeCustomTime, editSnoozeModeButtons, editStatus, editViewer,
       fileBtn, filePickerIdentityHint, filePickerSectionLabel, filePickerTitle, fmtBytes,
-      formatPriorityOffset, handleAppAuthLoss, isDiffableFileKind, isMarkdownPreviewable,
+      formatPriorityOffset, handleAppAuthLoss, isDiffableFileKind, isPreviewableFilePath, isPreviewableFileKind,
       isTextEntryElement, isTextFileKind, modalIsolationTargets, normalizeDraftFilePath,
       parseLocalFileRef, rawByteDuplicatePaths, refreshSessions, selectedSessionLaunchFailed,
       sessionDisplayName, setPickerButtonContent, storageGetItem,
@@ -803,8 +803,8 @@ async function renderMonacoDiff(rel, originalText, modifiedText, lineNumber = nu
   return await fileEditorRenderer.renderDiff(rel, originalText, modifiedText, lineNumber, request);
 }
 
-function renderMarkdownPreview(rel, text) {
-  return fileFallbackRuntime.applyMarkdown(rel, text);
+function renderFilePreview(rel, text, preview) {
+  return fileFallbackRuntime.applyFilePreview(rel, text, preview);
 }
 
 function renderBlockedFileNotice(rel, reason, viewerMaxBytes, size) {
@@ -862,7 +862,7 @@ const fileViewerController = codoxearFileViewer.createFileViewerController(wirin
   initialFileNonDiffMode: storageGetItem("codexweb.fileNonDiffMode") === "preview" ? "preview" : "file",
   persistFileViewMode: (mode) => storageSetItem("codexweb.fileViewMode", mode),
   persistFileNonDiffMode: (mode) => storageSetItem("codexweb.fileNonDiffMode", mode),
-  isMarkdownPreviewable,
+  isPreviewableFilePath, isPreviewableFileKind,
   resetActiveFileBufferState: () => resetActiveFileBufferState(),
   updateFileTouchToolbar: () => updateFileTouchToolbar(),
   hasBlockingFileEditorModal: () => hasBlockingFileEditorModal(),
@@ -1061,7 +1061,7 @@ const fileLoadResultRuntime = codoxearFileViewer.createFileLoadResultRuntime(wir
   disposeFileEditor: () => disposeFileEditor(),
   renderMonacoDiff: (rel, originalText, modifiedText, lineNumber, request, options) => renderMonacoDiff(rel, originalText, modifiedText, lineNumber, request, options),
   renderMonacoFile: (rel, text, lineNumber, langOverride, request) => renderMonacoFile(rel, text, lineNumber, langOverride, request),
-  renderMarkdownPreview: (rel, text) => renderMarkdownPreview(rel, text),
+  renderFilePreview: (rel, text, preview) => renderFilePreview(rel, text, preview),
   renderBlockedFileNotice: (rel, reason, viewerMaxBytes, size) => renderBlockedFileNotice(rel, reason, viewerMaxBytes, size),
   renderPdfFile: (rel, url, request) => renderPdfFile(rel, url, request),
   showImage: (src, alt) => fileRenderSurfaceRuntime.showImage(src, alt),

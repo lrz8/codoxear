@@ -98,7 +98,7 @@ import * as CodoxearWiring from "./app_wiring.js";
       dataTransferHasFiles, extractFilesFromClipboardData, extractFilesFromDropData, safeAttachmentStem,
       isLikelyHeic, looksLikeImage, b64FromBytes, codoxearFilePicker, codoxearFileViewer,
       codoxearFileEditor, normalizeLineNumber, parseLocalFileRef,
-      isMarkdownPreviewable, markdownPreviewHtml, chatMarkdownHtmlCached, iconSvg,
+      isPreviewableFilePath, isPreviewableFileKind, markdownPreviewHtml, chatMarkdownHtmlCached, iconSvg,
       cleanupActiveApp, renderLogin, setActiveAppCleanup, clearActiveAppCleanup
     } = deps;
     if (typeof cleanupActiveApp !== "function" || typeof setActiveAppCleanup !== "function" || typeof clearActiveAppCleanup !== "function") {
@@ -813,7 +813,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           editPriorityResetBtn, editPriorityValue, editSaveBtn, editSnoozeCustomDate,
           editSnoozeCustomRow, editSnoozeCustomTime, editSnoozeModeButtons, editStatus, editViewer,
           fileBtn, filePickerIdentityHint, filePickerSectionLabel, filePickerTitle, fmtBytes,
-          formatPriorityOffset, handleAppAuthLoss, isDiffableFileKind, isMarkdownPreviewable,
+          formatPriorityOffset, handleAppAuthLoss, isDiffableFileKind, isPreviewableFilePath, isPreviewableFileKind,
           isTextEntryElement, isTextFileKind, modalIsolationTargets, normalizeDraftFilePath,
           parseLocalFileRef, rawByteDuplicatePaths, refreshSessions: () => sessionRefreshController.refreshSessions(), selectedSessionLaunchFailed,
           sessionDisplayName, setPickerButtonContent, storageGetItem,

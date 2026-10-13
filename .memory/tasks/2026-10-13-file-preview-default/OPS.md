@@ -1,0 +1,31 @@
+# OPS
+
+## 2026-10-13T09:5x+08:00 — session start, problem framing
+
+- Request: "when opening md/html etc in file viewer, enter preview mode by default."
+- Read `codoxear/static/app_file_viewer_controller.js`, `app_file_viewer_operations.js`, `app_file_viewer.js`, `app_file_viewer_lifecycle.js`, `app_file_candidate_state.js`, `app_markdown.js`, `app_file_helpers.js`, `app_wiring.js`, `app_application*.js`, `app_file_ops.js`, `codoxear/file_text.py`, `file_view.py`, `file_get_routes.py`, `file_response.py`, `path_runtime.py`, `server_handler.py`, `static_routes.py`.
+- Mechanism for the source-view default (two independent causes):
+  1. `resolveFileOpenMode` returned `"preview"` for markdown only when the globally persisted `codexweb.fileNonDiffMode` was `"preview"` (default `"file"`), and `setFileViewMode("file")` rewrote that key on every non-previewable open, so the preview preference could not survive an unrelated file open.
+  2. `openReference` (`app_file_viewer.js`) hardcoded `mode: "file"` for every transcript file link, which set the global mode to `file` before resolution ran.
+- Verified HTML has no preview path at all: server kind vocabulary is `image|pdf|video|download_only|directory|markdown|text` (`file_types.file_kind`, `file_text.markdown_kind`), `currentFileModeControlState` revealed the preview control only for `kind === "markdown"`, and `_send_preview_blob` refuses non-media kinds (400 "file is not previewable inline").
+- Measured facts that fixed the design: auth cookie is `SameSite=Strict` (`codoxear/auth.py:114`) so a sandboxed opaque-origin frame would 401 every relative subresource → the frame needs `sandbox="allow-same-origin"`; `urlparse` path is not unquoted by `server_handler`, so a raw path route must decode segments itself; `CONTENT_SECURITY_POLICY` is applied to static responses, not to file routes.
+
+## 2026-10-13T10:2x+08:00 — server side delegated and delivered
+
+- Dispatched `executor` (async) for the server half with a frozen interface: `html` kind, `preview_url` in the html read payload, `GET /api/sessions/<id>/file/raw/<path>` with percent-byte-faithful coding, MIME table, `nosniff`, and `Content-Security-Policy: sandbox allow-same-origin` on executable document types.
+- Subagent result (commit `3018751f Add sandboxed raw HTML preview route`): `file_types.py` + `HTML_EXTENSIONS`, `file_text.document_kind` (replaces `markdown_kind`), `file_view.py`, `server_routing.py` prefix matcher, `file_get_routes.py` raw handler + `preview_url`, `file_response.py` `extra_headers`, `server.py` DEPS wiring, tests in `tests/test_file_routes.py` and `tests/test_file_types.py`.
+- Reported evidence: `104 passed, 52 subtests passed` (file routes/inspect/types/view-module), `113 passed` with `test_file_response_module.py`, and a real header dump `200 / text/html; charset=utf-8 / sandbox allow-same-origin / nosniff / no-store`. Preview URL shape `/api/sessions/sid/file/raw/docs/my%20report.html`; browser-style relative resolution from `.../raw/docs/my%20report.html` → `.../raw/docs/img/x.png` accepted by the matcher and route.
+- Reported note: the broad `-k file` sweep stopped at `tests/test_file_picker_session_state.py` because of the in-flight client edits, not a server defect. Fixed on the client side (see below).
+
+## 2026-10-13T10:5x+08:00 — client implementation
+
+- `app_file_helpers.js`: added `MARKDOWN_EXTENSIONS`/`HTML_EXTENSIONS`, `fileExtensionLower`, `isPreviewableFileKind`, `isPreviewableFilePath`; `isTextFileKind` now includes `html` (so html stays diffable/editable).
+- `app_viewer_controller.js`: `isMarkdownPreviewable` dep replaced by `isPreviewableFilePath` (path clamp in `resolveFileOpenViewMode`) + `isPreviewableFileKind` (authoritative kind from inspect); `resolveFileOpenMode` gained `requestedMode` (explicit wins), and `kind === "markdown" && fileNonDiffMode === "preview"` became `isPreviewableFileKind(kind) → "preview"`; `applyActiveFileTextState` guard now uses `isTextFileKind`.
+- `app_file_viewer_operations.js`: text branch keeps the server kind when previewable, requires `preview_url` for html (otherwise source view + `preview unavailable` status and a `setFileViewMode("file")` correction), returns `previewKind`/`previewUrl`; preview control visibility is kind-based; `openFilePathWithResolvedMode` accepts and forwards `mode`; the preview toggle guard is kind-based.
+- `app_file_viewer.js`: `renderHtmlDocument` creates `iframe.fileHtmlPreview` with `sandbox="allow-same-origin"` (no `allow-scripts`) + `referrerpolicy="no-referrer"`; `applyFilePreview` dispatches markdown/html; the load-result runtime renamed `renderMarkdownPreview` → `renderFilePreview(rel, text, {kind, url})` and resolves the server URL through `resolveAppUrl`; `openReference` passes `mode: referenceOpenMode(line)` (`"file"` only when a line is targeted, else `""`).
+- `app_file_viewer_lifecycle.js`: `show()` derives `explicitOpenMode` from its `mode` argument and forwards it into `openFilePathWithResolvedMode` (this is what keeps line-targeted links in source view for a previewable document).
+- Plumbing: `app_application.js`, `app_application_composition.js`, `app_file_ops.js`, `app_wiring.js` select lists; `dist/app.bundle.js` rebuilt with the deploy flags (`npx esbuild codoxear/static/app.js --bundle --minify --outfile=... --format=esm` → 648985 bytes).
+- `app.css`: `.fileHtmlPreview` fills the viewer host with a concentric radius.
+- Tests: new `tests/test_file_preview_default.py` (6 behavioral VM tests: per-kind open default incl. uppercase/markdown/diff/explicit; html preview plan incl. missing-URL fallback; sandboxed frame + load dispatch; line-targeted reference mode; lifecycle mode forwarding; client↔server extension-set pin). Updated `tests/test_frontend_wiring.py` pinned select lists and `tests/test_file_picker_session_state.py` fake deps.
+- Pre-commit verification: `scripts/check_wiring.py` → `✓ Wiring guard passed` (files=81); `node --input-type=module --check` on every touched module → clean; full `python3 -m pytest tests -q -p no:randomly` → `2190 passed, 112 subtests passed`.
+- Bundle reproducibility cross-check: an esbuild build of a clean HEAD worktree reproduced the committed `dist/app.bundle.js` byte-for-byte, so the committed bundle stays derivable from source (no unexplained bundler drift).

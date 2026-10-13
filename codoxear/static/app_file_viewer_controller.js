@@ -46,7 +46,8 @@ function requireFunction(value, name) {
     const disposeOpenRender = requireFunction(deps && deps.disposeOpenRender, "disposeOpenRender");
     const persistFileViewMode = requireFunction(deps && deps.persistFileViewMode, "persistFileViewMode");
     const persistFileNonDiffMode = requireFunction(deps && deps.persistFileNonDiffMode, "persistFileNonDiffMode");
-    const isMarkdownPreviewable = requireFunction(deps && deps.isMarkdownPreviewable, "isMarkdownPreviewable");
+    const isPreviewableFilePath = requireFunction(deps && deps.isPreviewableFilePath, "isPreviewableFilePath");
+    const isPreviewableFileKind = requireFunction(deps && deps.isPreviewableFileKind, "isPreviewableFileKind");
     const updateFileTouchToolbar = requireFunction(deps && deps.updateFileTouchToolbar, "updateFileTouchToolbar");
     const hasBlockingFileEditorModal = requireFunction(deps && deps.hasBlockingFileEditorModal, "hasBlockingFileEditorModal");
     const isTextEntryTarget = requireFunction(deps && deps.isTextEntryTarget, "isTextEntryTarget");
@@ -347,7 +348,7 @@ function requireFunction(value, name) {
     }
     function applyActiveFileTextState({ kind = "text", text = "", editable = false, version = "", draft = false } = {}) {
       const nextKind = String(kind || "text");
-      if (nextKind !== "text" && nextKind !== "markdown") throw new Error("invalid active file text kind");
+      if (!isTextFileKind(nextKind)) throw new Error("invalid active file text kind");
       activeFileKind = nextKind;
       activeFileText = String(text ?? "");
       activeFileEditable = Boolean(editable);
@@ -450,9 +451,16 @@ function requireFunction(value, name) {
       const entry = activeFileEntry();
       const canUseDiffView = request && request.gitPath && currentFileCandidateGitStateFresh() && Boolean(entry && entry.changed);
       const viewMode = currentFileViewMode();
-      return viewMode === "preview" && !isMarkdownPreviewable(rel) ? "file" : viewMode === "diff" && !canUseDiffView ? "file" : viewMode;
+      return viewMode === "preview" && !isPreviewableFilePath(rel) ? "file" : viewMode === "diff" && !canUseDiffView ? "file" : viewMode;
     }
-    async function resolveFileOpenMode(path, { changed = null, gitPath = null, apiPath = "" } = {}) {
+    // Open-time default per document kind. A previewable document opens in
+    // preview (its rendered form), a changed diffable file opens as a diff,
+    // and everything else opens as source. Explicit caller requests win over
+    // all of it: a line-targeted transcript reference (`doc.md:120`) asks for
+    // a line, which only source view can show.
+    async function resolveFileOpenMode(path, { changed = null, gitPath = null, apiPath = "", requestedMode = null } = {}) {
+      const explicitMode = normalizeExplicitFileOpenMode(requestedMode);
+      if (explicitMode) return explicitMode;
       const token = normalizeFileApiPath(apiPath);
       const useGitPath = gitPath === null || gitPath === undefined ? isGitFileCandidatePath(path, changed, null, token) : Boolean(gitPath);
       const identityEntry = fileEntryForPath(path, useGitPath, token);
@@ -466,7 +474,7 @@ function requireFunction(value, name) {
       const kind = String(inspect.kind || "").trim();
       const isChanged = currentFileCandidateGitStateFresh() && candidateChanged;
       if (isChanged && isDiffableFileKind(kind)) return "diff";
-      if (kind === "markdown" && currentFileNonDiffMode() === "preview") return "preview";
+      if (isPreviewableFileKind(kind)) return "preview";
       return "file";
     }
     function isFileOpenAbortError(error) {
@@ -575,7 +583,7 @@ function requireFunction(value, name) {
       api: deps.api,
       focusEditor: deps.focusEditor,
       disposeOpenRender: deps.disposeOpenRender,
-      isMarkdownPreviewable: deps.isMarkdownPreviewable,
+      isPreviewableFileKind: deps.isPreviewableFileKind,
       updateFileTouchToolbar: deps.updateFileTouchToolbar,
       hasBlockingFileEditorModal: deps.hasBlockingFileEditorModal,
       isTextEntryTarget: deps.isTextEntryTarget,

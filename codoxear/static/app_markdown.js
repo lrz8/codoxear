@@ -832,10 +832,6 @@ import * as CodoxearUrls from "./app_application.js";
     return html;
   }
 
-  function isMarkdownPreviewable(path) {
-    return ["md", "markdown", "mdown", "mkd"].includes(filePathExtension(path));
-  }
-
   function previewImageUrlForRef(rawRef, localRef, { filePath, sessionId } = {}) {
     if (localRef && localRef.path) {
       if (sessionId) return resolveAppUrl(`/api/sessions/${sessionId}/file/blob?path=${encodeURIComponent(localRef.path)}`);
@@ -916,4 +912,4 @@ import * as CodoxearUrls from "./app_application.js";
     });
   }
 
-export { escapeHtml, mdToHtml, mdToHtmlCached, normalizeLineNumber, parseLocalFileRef, isMarkdownPreviewable, markdownPreviewHtml, chatMarkdownHtmlCached, attachmentDisplayMarkdown, prepareImageForDisplay, rememberImageDimensions, hydrateMarkedImages, rewriteMarkedVideos, previewVideoUrlForRef };
+export { escapeHtml, mdToHtml, mdToHtmlCached, normalizeLineNumber, parseLocalFileRef, markdownPreviewHtml, chatMarkdownHtmlCached, attachmentDisplayMarkdown, prepareImageForDisplay, rememberImageDimensions, hydrateMarkedImages, rewriteMarkedVideos, previewVideoUrlForRef };

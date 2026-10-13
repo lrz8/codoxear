@@ -10,7 +10,7 @@
     });
   }
   function createFileViewerOperationsRuntime(options = {}) {
-    const { el, fileStatus, fileEditButton, iconSvg, currentSessionId, currentFileSessionId, normalizeSessionId, normalizeFileApiPath, isFileViewerOpen, hideFileUnsavedDialog, resetFileSearchState, closeFilePickerMenu, isTextFileKind, isDiffableFileKind, confirmReload, promptUnsavedFileChoice, restoreFileEditorText, hideFileViewer, setFilePath, resetFileViewerPanel, applyFileLoadResult, normalizeDraftFilePath, inspectSessionFilePath, api, focusEditor, disposeOpenRender, isMarkdownPreviewable, updateFileTouchToolbar, hasBlockingFileEditorModal, isTextEntryTarget, eventTargetElement, isActiveFileEditorInput, focusActiveFileCodeEditor, nowMs, setToast, renderMonacoFile, getFileEditorText, fmtBytes, applyFileMode, rememberOpenedFile, renderFilePickerMenu, currentFileViewMode, currentFileNonDiffMode, setFileViewMode, currentFileEditMode, currentFileEditorKind, setFileEditorKind, setFileEditMode, currentActiveFileKind, currentActiveFileText, currentActiveFileEditable, currentActiveFileVersion, currentActiveFileDraft, applyActiveFileTextState, applyActiveFileDiffState, applyActiveFileNonTextState, currentActiveFileIdentity, currentActiveFileLine, startFileOpenRequest, isCurrentFileOpenRequest, normalizeExplicitFileOpenMode, resolveFileOpenMode, isFileOpenAbortError, activeFileEntry, isGitFileCandidatePath, currentFileCandidateGitStateFresh, activeFileCanEnterEditMode, activeFileEditorWritable, activeFileEditorInsertIdleTextWritable, currentFileEditorState, isUnavailable, blockUnavailableFileAction, fileEntryForPath, resetActiveFileBufferState, resolveFileOpenViewMode, isFileViewerSessionUnavailable, rememberActiveFileSelection, setActiveFileIdentity } = options;
+    const { el, fileStatus, fileEditButton, iconSvg, currentSessionId, currentFileSessionId, normalizeSessionId, normalizeFileApiPath, isFileViewerOpen, hideFileUnsavedDialog, resetFileSearchState, closeFilePickerMenu, isTextFileKind, isDiffableFileKind, confirmReload, promptUnsavedFileChoice, restoreFileEditorText, hideFileViewer, setFilePath, resetFileViewerPanel, applyFileLoadResult, normalizeDraftFilePath, inspectSessionFilePath, api, focusEditor, disposeOpenRender, isPreviewableFileKind, updateFileTouchToolbar, hasBlockingFileEditorModal, isTextEntryTarget, eventTargetElement, isActiveFileEditorInput, focusActiveFileCodeEditor, nowMs, setToast, renderMonacoFile, getFileEditorText, fmtBytes, applyFileMode, rememberOpenedFile, renderFilePickerMenu, currentFileViewMode, currentFileNonDiffMode, setFileViewMode, currentFileEditMode, currentFileEditorKind, setFileEditorKind, setFileEditMode, currentActiveFileKind, currentActiveFileText, currentActiveFileEditable, currentActiveFileVersion, currentActiveFileDraft, applyActiveFileTextState, applyActiveFileDiffState, applyActiveFileNonTextState, currentActiveFileIdentity, currentActiveFileLine, startFileOpenRequest, isCurrentFileOpenRequest, normalizeExplicitFileOpenMode, resolveFileOpenMode, isFileOpenAbortError, activeFileEntry, isGitFileCandidatePath, currentFileCandidateGitStateFresh, activeFileCanEnterEditMode, activeFileEditorWritable, activeFileEditorInsertIdleTextWritable, currentFileEditorState, isUnavailable, blockUnavailableFileAction, fileEntryForPath, resetActiveFileBufferState, resolveFileOpenViewMode, isFileViewerSessionUnavailable, rememberActiveFileSelection, setActiveFileIdentity } = options;
     let activeSaveConflict = null, fileSaveSeq = 0, activeFileSaveToken = 0, fileSavePending = false, fileDirty = false, fileUnsavedPromptResolver = null, activeVideoFallback = null, activePdfRender = null;
     function activeVideoFallbackSnapshot() {
       const state = activeVideoFallback;
@@ -174,14 +174,23 @@
         return Object.freeze({ kind: "download_only", reason: String(result.reason || ""), viewerMaxBytes: Number(result.viewer_max_bytes || 0), size, status: `${path} - download only - ${fmtBytes(size)}` });
       }
       if (typeof result.text !== "string") throw new Error("invalid response");
-      applyActiveFileTextState({ kind: result.kind === "markdown" ? "markdown" : "text", text: result.text, editable: Boolean(result.editable), version: typeof result.version === "string" ? result.version : "" });
-      const renderPreview = viewMode === "preview" && currentActiveFileKind() === "markdown";
+      const textKind = String(result.kind || "");
+      applyActiveFileTextState({ kind: isPreviewableFileKind(textKind) ? textKind : "text", text: result.text, editable: Boolean(result.editable), version: typeof result.version === "string" ? result.version : "" });
+      // HTML preview renders the document from a server-provided URL (a real
+      // directory-shaped file URL so the browser resolves the document's own
+      // relative assets). A server that cannot produce that URL leaves the
+      // document in source view rather than an empty frame, and says so.
+      const previewUrl = textKind === "html" ? String(result.preview_url || "") : "";
+      const previewUnavailable = textKind === "html" && previewUrl === "";
+      const renderPreview = viewMode === "preview" && isPreviewableFileKind(textKind) && !previewUnavailable;
+      if (viewMode === "preview" && previewUnavailable) setFileViewMode("file");
       const size = typeof result.size === "number" ? result.size : result.text.length;
       const statusParts = [path];
       if (renderPreview) statusParts.push("preview");
+      if (previewUnavailable) statusParts.push("preview unavailable");
       if (!currentActiveFileEditable()) statusParts.push("read-only");
       statusParts.push(fmtBytes(size));
-      return Object.freeze({ kind: "text", text: result.text, renderPreview, status: statusParts.join(" - ") });
+      return Object.freeze({ kind: "text", text: result.text, renderPreview, previewKind: renderPreview ? textKind : "", previewUrl, status: statusParts.join(" - ") });
     }
 
     function beginCompatibleVideoPreview(expectedToken = "") {
@@ -253,7 +262,7 @@
       const isDiff = viewMode === "diff";
       const isPreview = viewMode === "preview";
       const diffable = Boolean(canToggleMode && identity.gitPath && currentFileCandidateGitStateFresh() && entry && entry.changed && isDiffableFileKind(currentActiveFileKind()));
-      const previewable = Boolean(!draft && currentActiveFileKind() === "markdown");
+      const previewable = Boolean(!draft && isPreviewableFileKind(currentActiveFileKind()));
       const fallback = activeVideoFallback;
       const videoVisible = Boolean(fallback && fallback.previewUrl && !fallback.used);
       const videoPreparing = Boolean(fallback && fallback.preparing);
@@ -565,7 +574,7 @@
       return Boolean(currentGuard());
     }
 
-    async function openFilePathWithResolvedMode(path, { line = null, changed = null, isCurrent = null, gitPath = null, apiPath = "" } = {}) {
+    async function openFilePathWithResolvedMode(path, { line = null, changed = null, isCurrent = null, gitPath = null, apiPath = "", mode = null } = {}) {
       if (blockUnavailableFileAction()) return false;
       const sessionAtStart = currentFileSessionId();
       const currentGuard = typeof isCurrent === "function" ? isCurrent : () => currentFileSessionId() === sessionAtStart && !isFileViewerSessionUnavailable();
@@ -573,15 +582,15 @@
       const useGitPath = gitPath === null || gitPath === undefined ? isGitFileCandidatePath(path, changed, null, token) : Boolean(gitPath);
       const entry = fileEntryForPath(path, useGitPath, token);
       const requestApiPath = token || normalizeFileApiPath(entry && entry.apiPath);
-      let mode;
+      let resolvedMode;
       try {
-        mode = await resolveFileOpenMode(path, { changed, gitPath: useGitPath, apiPath: requestApiPath });
+        resolvedMode = await resolveFileOpenMode(path, { changed, gitPath: useGitPath, apiPath: requestApiPath, requestedMode: mode });
       } catch (error) {
         if (blockUnavailableFileAction()) return false;
         throw error;
       }
       if (!currentGuard()) return false;
-      return await openFilePathWithGuard(path, { line, mode, isCurrent: currentGuard, gitPath: useGitPath, apiPath: requestApiPath });
+      return await openFilePathWithGuard(path, { line, mode: resolvedMode, isCurrent: currentGuard, gitPath: useGitPath, apiPath: requestApiPath });
     }
 
     async function openDraftFilePathWithGuard(path) {
@@ -662,8 +671,7 @@
     }
 
     async function handleFilePreviewModeButtonPress() {
-      const identity = currentActiveFileIdentity();
-      if (!isMarkdownPreviewable(identity.path)) return false;
+      if (!isPreviewableFileKind(currentActiveFileKind())) return false;
       const nextMode = currentFileViewMode() === "preview" ? "file" : "preview";
       return await setFileViewModeWithGuard(nextMode);
     }

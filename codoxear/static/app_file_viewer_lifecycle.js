@@ -301,6 +301,10 @@
       }
       if (mode === "file" || mode === "diff" || mode === "preview") ui.setFileViewMode(mode);
       else ui.applyFileMode();
+      // The caller's explicit mode also drives open-mode resolution: it is how
+      // a line-targeted transcript reference keeps source view for a
+      // previewable document.
+      const explicitOpenMode = mode === "file" || mode === "diff" || mode === "preview" ? mode : null;
       if (queryOpen) {
         ui.resetFileViewerPanel();
         clearActiveFileIdentity({ line });
@@ -317,7 +321,7 @@
       const target = transition.resolveOpenTarget({ sessionId: sid, explicitPath, explicitLine: line });
       if (target.kind === "path") {
         deps.setFilePath(target.path, { line: target.line, gitPath: target.gitPath, apiPath: target.apiPath });
-        void deps.openFilePathWithResolvedMode(target.path, { line: target.line, changed: target.changed, gitPath: target.gitPath, apiPath: target.apiPath, isCurrent: () => isSessionCurrent(sid, syncToken) }).catch((error) => {
+        void deps.openFilePathWithResolvedMode(target.path, { line: target.line, changed: target.changed, gitPath: target.gitPath, apiPath: target.apiPath, mode: explicitOpenMode, isCurrent: () => isSessionCurrent(sid, syncToken) }).catch((error) => {
           if (!isSessionCurrent(sid, syncToken)) return;
           deps.setStatus(`error: ${error && error.message ? error.message : "unable to inspect path"}`);
         });
