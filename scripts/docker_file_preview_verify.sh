@@ -245,6 +245,10 @@ browser_step 05-login-click click '#loginBtn' || fail "login button missing"
 browser_step 06-login-wait wait 3500 || fail "login did not settle"
 browser_step 07-select-session click "$card_selector" || fail "Pi session card missing"
 browser_step 08-select-wait wait 1600 || fail "session selection did not settle"
+# Baseline before a document is opened: Resource Timing makes any 4xx URL
+# explicit instead of inferring it from console wording.
+browser_step 08a-errors-after-login errors --json || fail "cannot collect login checkpoint errors"
+browser_step 08b-resource-failures-after-login eval 'performance.getEntriesByType("resource").filter((e) => (e.responseStatus || 0) >= 400).map((e) => [e.name, e.responseStatus, e.initiatorType])' --json || fail "cannot collect login checkpoint resource failures"
 
 # The user row is sufficient: Pi is offline, so a failed assistant turn does
 # not weaken this transcript-link test.
@@ -258,6 +262,11 @@ browser_step 13-click-notes click 'a.inlineFileLink[data-file-path$="/notes.md"]
 browser_step 14-notes-wait wait 1500 || fail "notes preview did not settle"
 browser_step 15-markdown-preview eval '(() => { const v=(n)=>!!n&&getComputedStyle(n).display!=="none"&&getComputedStyle(n).visibility!=="hidden"&&n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0; const viewer=document.querySelector("#fileViewer"); const p=document.querySelector(".fileMarkdownPreview"); const monaco=Array.from(document.querySelectorAll(".monaco-editor")).some(v); const b=document.querySelector("#fileModePreviewBtn"); return {viewerOpen:v(viewer), previewVisible:v(p), heading:p?.textContent.includes("Notes Heading")||false, monacoVisible:monaco, previewActive:b?.classList.contains("active")||false}; })()' --json || fail "cannot inspect markdown preview"
 browser_step 16-markdown-preview-screenshot screenshot --full "$artifacts/markdown-preview.png" || fail "markdown screenshot failed"
+# This checkpoint isolates the one-document scenario: it is collected before
+# the source toggle or any file switch can cancel an in-flight load.
+browser_step 16a-errors-after-markdown errors --json || fail "cannot collect markdown checkpoint errors"
+browser_step 16b-console-after-markdown console --json || fail "cannot collect markdown checkpoint console"
+browser_step 16c-resource-failures-after-markdown eval 'performance.getEntriesByType("resource").filter((e) => (e.responseStatus || 0) >= 400).map((e) => [e.name, e.responseStatus, e.initiatorType])' --json || fail "cannot collect markdown checkpoint resource failures"
 
 # B: the preview control toggles source and returns to preview.
 browser_step 17-toggle-source click '#fileModePreviewBtn' || fail "preview toggle unavailable"
@@ -273,7 +282,14 @@ browser_step 23-markdown-preview-return eval '(() => { const v=(n)=>!!n&&getComp
 browser_step 24-close-notes click '#fileCloseBtn' || fail "cannot close markdown viewer"
 browser_step 25-click-report click 'a.inlineFileLink[data-file-path$="/report.html"]' || fail "report.html transcript link missing"
 browser_step 26-report-wait wait 2000 || fail "HTML preview did not settle"
-browser_step 27-html-preview eval '(() => { const v=(n)=>!!n&&getComputedStyle(n).display!=="none"&&n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0; const viewer=document.querySelector("#fileViewer"); const f=document.querySelector("iframe.fileHtmlPreview"); const d=f?.contentDocument; const img=d?.querySelector("#fixture-image"); return {viewerOpen:v(viewer), frameExists:!!f, frameVisible:v(f), src:f?.src||null, documentUrl:d?.URL||null, bodyText:d?.body?.innerText||null, sandbox:f?.getAttribute("sandbox")||null, hasAllowScripts:(f?.getAttribute("sandbox")||"").split(/\\s+/).includes("allow-scripts"), heading:d?.querySelector("#title")?.textContent||null, imageNaturalWidth:img?.naturalWidth ?? null, backgroundColor:d?.body ? getComputedStyle(d.body).backgroundColor : null}; })()' --json || fail "cannot inspect HTML frame"
+browser_step 27-html-preview eval '(() => { const v=(n)=>!!n&&getComputedStyle(n).display!=="none"&&n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0; const viewer=document.querySelector("#fileViewer"); const f=document.querySelector("iframe.fileHtmlPreview"); const d=f?.contentDocument; const img=d?.querySelector("#fixture-image"); const status=document.querySelector("#fileStatus"); return {viewerOpen:v(viewer), frameExists:!!f, frameVisible:v(f), src:f?.src||null, documentUrl:d?.URL||null, bodyText:d?.body?.innerText||null, sandbox:f?.getAttribute("sandbox")||null, hasAllowScripts:(f?.getAttribute("sandbox")||"").split(/\\s+/).includes("allow-scripts"), statusLine:status?.textContent||null, heading:d?.querySelector("#title")?.textContent||null, imageNaturalWidth:img?.naturalWidth ?? null, backgroundColor:d?.body ? getComputedStyle(d.body).backgroundColor : null}; })()' --json || fail "cannot inspect HTML frame"
+# Fetching the same frame URL inside Chromium records the response headers
+# without probing the host/server API outside the real browser flow.
+browser_step 27a-errors-after-html errors --json || fail "cannot collect HTML checkpoint errors"
+browser_step 27b-resource-failures-after-html eval 'performance.getEntriesByType("resource").filter((e) => (e.responseStatus || 0) >= 400).map((e) => [e.name, e.responseStatus, e.initiatorType])' --json || fail "cannot collect HTML checkpoint resource failures"
+# Fetch the same frame URL only after the resource checkpoint, so this
+# header-evidence request does not add an entry to the checkpoint list.
+browser_step 27c-html-response-headers eval '(async () => { const frame=document.querySelector("iframe.fileHtmlPreview"); const response=await fetch(frame?.src || "", {credentials:"same-origin"}); return {url:response.url, status:response.status, contentType:response.headers.get("content-type"), contentSecurityPolicy:response.headers.get("content-security-policy")}; })()' --json || fail "cannot inspect HTML frame response headers"
 browser_step 28-html-preview-screenshot screenshot --full "$artifacts/html-preview.png" || fail "HTML screenshot failed"
 
 # D: a plain source file reached through the actual picker stays in Monaco.
@@ -333,6 +349,14 @@ md = browser_result("15-markdown-preview")
 source = browser_result("19-markdown-source")
 returned = browser_result("23-markdown-preview-return")
 html = browser_result("27-html-preview")
+html_headers = browser_result("27c-html-response-headers")
+login_errors = browser_payload("08a-errors-after-login").get("data", {}).get("errors", [])
+login_resource_failures = browser_result("08b-resource-failures-after-login")
+early_errors = browser_payload("16a-errors-after-markdown").get("data", {}).get("errors", [])
+early_console = browser_payload("16b-console-after-markdown").get("data", {}).get("messages", [])
+markdown_resource_failures = browser_result("16c-resource-failures-after-markdown")
+html_errors = browser_payload("27a-errors-after-html").get("data", {}).get("errors", [])
+html_resource_failures = browser_result("27b-resource-failures-after-html")
 main_options = browser_result("32-main-options")
 plain = browser_result("35-plain-source")
 readme_options = browser_result("37-readme-options")
@@ -345,7 +369,7 @@ fatal_console = [x for x in console if isinstance(x, dict) and re.search(r"\\b(?
 checks = {
   "A_transcript_markdown_preview": bool(isinstance(links, list) and any(str(x.get("path") or "").endswith("/notes.md") for x in links if isinstance(x, dict)) and md.get("viewerOpen") is True and md.get("previewVisible") is True and md.get("heading") is True and md.get("monacoVisible") is False and md.get("previewActive") is True),
   "B_toggle_source_and_back": source.get("previewNodePresent") is False and source.get("monacoVisible") is True and source.get("previewActive") is False and returned.get("previewVisible") is True and returned.get("heading") is True and returned.get("previewActive") is True,
-  "C_transcript_html_preview": html.get("viewerOpen") is True and html.get("frameExists") is True and html.get("frameVisible") is True and html.get("sandbox") == "allow-same-origin" and html.get("hasAllowScripts") is False and html.get("heading") == "HTML Report Heading" and isinstance(html.get("imageNaturalWidth"), int) and html["imageNaturalWidth"] > 0 and html.get("backgroundColor") == "rgb(16, 24, 32)",
+  "C_transcript_html_preview": html.get("viewerOpen") is True and html.get("frameExists") is True and html.get("frameVisible") is True and html.get("sandbox") == "allow-same-origin" and html.get("hasAllowScripts") is False and isinstance(html.get("statusLine"), str) and "preview (scripts blocked)" in html["statusLine"] and html.get("heading") == "HTML Report Heading" and isinstance(html.get("imageNaturalWidth"), int) and html["imageNaturalWidth"] > 0 and html.get("backgroundColor") == "rgb(16, 24, 32)" and html_headers.get("status") == 200 and html_headers.get("contentType") == "text/html; charset=utf-8" and html_headers.get("contentSecurityPolicy") == "sandbox allow-same-origin",
   "D_picker_plain_source": bool(isinstance(main_options, list) and any("main.py" in str(x.get("text")) for x in main_options if isinstance(x, dict)) and plain.get("monacoVisible") is True and plain.get("previewPresent") is False and plain.get("previewButtonHidden") is True and plain.get("previewActive") is False),
   "E_picker_changed_markdown_diff": bool(isinstance(readme_options, dict) and any(isinstance(x, dict) and "README.md" in str(x.get("text")) and x.get("changed") for x in readme_options.get("options", [])) and diff.get("diffVisible") is True and diff.get("diffActive") is True),
   "F_no_js_errors": errors == [] and not fatal_console,
@@ -354,7 +378,7 @@ checks = {
 report = {
   "commit": sys.argv[2], "pass": all(checks[k] for k in checks if k != "G_line_targeted_reference_source"),
   "checks": checks,
-  "observed": {"transcriptLinks":links, "markdownPreview":md, "markdownSource":source, "markdownPreviewReturn":returned, "htmlPreview":html, "mainOptions":main_options, "plainSource":plain, "readmeOptions":readme_options, "changedDiff":diff, "lineReference":line, "pageErrors":errors, "fatalConsole":fatal_console, "console":console},
+  "observed": {"transcriptLinks":links, "markdownPreview":md, "errorCheckpoints":{"afterLogin":{"pageErrors":login_errors, "errorsEmpty":not login_errors, "resourceFailures":login_resource_failures}, "afterMarkdownPreview":{"pageErrors":early_errors, "errorsEmpty":not early_errors, "resourceFailures":markdown_resource_failures, "console":early_console}, "afterHtmlPreview":{"pageErrors":html_errors, "errorsEmpty":not html_errors, "resourceFailures":html_resource_failures}, "final":{"pageErrors":errors, "errorsEmpty":not errors, "fatalConsole":fatal_console}}, "markdownSource":source, "markdownPreviewReturn":returned, "htmlPreview":html, "htmlResponseHeaders":html_headers, "mainOptions":main_options, "plainSource":plain, "readmeOptions":readme_options, "changedDiff":diff, "lineReference":line, "pageErrors":errors, "fatalConsole":fatal_console, "console":console},
   "artifacts": {"markdownPreviewScreenshot":str(artifacts / "markdown-preview.png"), "markdownSourceScreenshot":str(artifacts / "markdown-source.png"), "htmlPreviewScreenshot":str(artifacts / "html-preview.png"), "changedDiffScreenshot":str(artifacts / "changed-readme-diff.png"), "containerLog":str(artifacts / "container.log")}
 }
 print(json.dumps(report, indent=2))
