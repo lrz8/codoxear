@@ -34,6 +34,16 @@ def match_session_route(path: str, *suffix: str) -> str | None:
     return session_id
 
 
+def match_session_file_raw_route(path: str) -> tuple[str, tuple[str, ...]] | None:
+    parts = path.split("/")
+    if len(parts) < 7 or parts[:3] != ["", "api", "sessions"] or parts[4:6] != ["file", "raw"]:
+        return None
+    session_id = parts[3]
+    if not session_id:
+        return None
+    return session_id, tuple(parts[6:])
+
+
 def strip_url_prefix(prefix: str, path: str) -> str | None:
     if not prefix:
         return path

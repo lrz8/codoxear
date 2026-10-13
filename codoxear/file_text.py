@@ -9,6 +9,7 @@ import stat
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
+from .file_types import HTML_EXTENSIONS
 from .file_types import MARKDOWN_EXTENSIONS
 from .file_types import TEXTUAL_EXTENSIONS
 from .file_types import TEXTUAL_FILENAMES
@@ -224,8 +225,13 @@ def file_extension(path: Path) -> str:
     return suffix[1:]
 
 
-def markdown_kind(path: Path) -> str:
-    return "markdown" if file_extension(path) in MARKDOWN_EXTENSIONS else "text"
+def document_kind(path: Path) -> str:
+    extension = file_extension(path)
+    if extension in MARKDOWN_EXTENSIONS:
+        return "markdown"
+    if extension in HTML_EXTENSIONS:
+        return "html"
+    return "text"
 
 
 def path_looks_textual(path: Path) -> bool:

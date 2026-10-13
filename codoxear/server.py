@@ -522,8 +522,20 @@ def _is_immutable_upload(path: Path) -> bool:
     return True
 
 
-def _send_inline_file_response(handler: http.server.BaseHTTPRequestHandler, path: Path, content_type: str) -> None:
-    _send_inline_file_response_impl(handler, path, content_type, immutable=_is_immutable_upload(path))
+def _send_inline_file_response(
+    handler: http.server.BaseHTTPRequestHandler,
+    path: Path,
+    content_type: str,
+    *,
+    extra_headers: Mapping[str, str] | None = None,
+) -> None:
+    _send_inline_file_response_impl(
+        handler,
+        path,
+        content_type,
+        immutable=_is_immutable_upload(path),
+        extra_headers=extra_headers,
+    )
 
 
 _resolve_under = _resolve_under_impl

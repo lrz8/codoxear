@@ -7,7 +7,7 @@ import stat
 
 from .file_text import FILE_READ_MAX_BYTES
 from .file_text import decode_text_view_for_client
-from .file_text import markdown_kind
+from .file_text import document_kind
 from .file_text import read_regular_file_bytes_no_symlink
 from .file_text import read_regular_file_prefix_no_symlink
 from .file_text import stat_path_no_symlink
@@ -72,7 +72,7 @@ def read_client_file_view(path_obj: Path) -> ClientFileView:
         return ClientFileView(kind="download_only", size=size, blocked_reason="binary")
     text, editable, version = text_payload
     return ClientFileView(
-        kind=markdown_kind(path_obj),
+        kind=document_kind(path_obj),
         size=size,
         text=text,
         editable=editable,

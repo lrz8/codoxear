@@ -5,7 +5,7 @@ import os
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Mapping
 
 from .file_text import open_regular_file_no_symlink
 from .git_ops import path_json_text as _path_json_text
@@ -137,6 +137,7 @@ def send_inline_file_response(
     content_type: str,
     *,
     immutable: bool = False,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> None:
     stream = _open_file_for_response(handler, path)
     if stream is None:
@@ -150,6 +151,8 @@ def send_inline_file_response(
             handler.send_header("Content-Range", f"bytes */{size}")
             handler.send_header("Accept-Ranges", "bytes")
             handler.send_header("Content-Length", "0")
+            for name, value in (extra_headers or {}).items():
+                handler.send_header(name, value)
             handler.end_headers()
             return
         start = 0 if byte_range is None else byte_range[0]
@@ -166,6 +169,8 @@ def send_inline_file_response(
         if not immutable:
             handler.send_header("Pragma", "no-cache")
             handler.send_header("Expires", "0")
+        for name, value in (extra_headers or {}).items():
+            handler.send_header(name, value)
         handler.end_headers()
         _stream_open_file_bytes(handler, opened_stream, start=start, length=length)
 

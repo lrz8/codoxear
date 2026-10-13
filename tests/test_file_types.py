@@ -1,7 +1,9 @@
 from pathlib import Path
+import tempfile
 
 from codoxear import file_types
 from codoxear import server
+from codoxear.file_view import read_client_file_view
 
 
 def test_file_type_helpers_classify_content_and_paths() -> None:
@@ -16,3 +18,34 @@ def test_file_type_helpers_classify_content_and_paths() -> None:
 
 def test_server_file_kind_facade_uses_file_types_runtime_function() -> None:
     assert server._file_kind(Path("img.png"), b"\x89PNG\r\n\x1a\nrest") == ("image", "image/png")
+
+
+def test_client_file_view_classifies_html_documents_and_preserves_other_kinds() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        files = {
+            "page.html": (b"<h1>HTML</h1>", "html"),
+            "page.htm": (b"<p>HTM</p>", "html"),
+            "page.HTML": (b"<p>uppercase</p>", "html"),
+            "notes.md": (b"# notes\n", "markdown"),
+            "notes.txt": (b"plain\n", "text"),
+            "icon.png": (b"\x89PNG\r\n\x1a\nbytes", "image"),
+        }
+        for name, (raw, expected_kind) in files.items():
+            path = base / name
+            path.write_bytes(raw)
+            view = read_client_file_view(path)
+            assert view.kind == expected_kind
+            if expected_kind == "html":
+                assert view.text == raw.decode("utf-8")
+                assert view.editable is True
+                assert view.version is not None
+
+
+def test_raw_file_content_type_covers_documents_assets_and_text_fallback() -> None:
+    assert file_types.raw_file_content_type(Path("page.html")) == "text/html; charset=utf-8"
+    assert file_types.raw_file_content_type(Path("page.XHTML")) == "application/xhtml+xml; charset=utf-8"
+    assert file_types.raw_file_content_type(Path("app.mjs")) == "text/javascript; charset=utf-8"
+    assert file_types.raw_file_content_type(Path("font.woff2")) == "font/woff2"
+    assert file_types.raw_file_content_type(Path("note.py")) == "text/plain; charset=utf-8"
+    assert file_types.raw_file_content_type(Path("blob.bin")) == "application/octet-stream"

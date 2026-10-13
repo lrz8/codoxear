@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+import io
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,12 @@ from codoxear.file_routes import resolve_session_write_update_path
 from codoxear.file_routes import session_file_read_payload
 from codoxear.file_routes import session_file_write_response
 from codoxear.file_view import ClientFileView
+from codoxear.file_view import read_client_file_view
+from codoxear.file_response import send_inline_file_response
+from codoxear.path_runtime import resolve_existing_session_file
+from codoxear.file_get_routes import decode_session_raw_file_path
+from codoxear.file_get_routes import encode_session_raw_file_path
+from codoxear.server_routing import match_session_file_raw_route
 
 
 @contextmanager
@@ -136,6 +143,26 @@ def test_resolve_session_write_update_path_preserves_legacy_absolute_update_path
         assert resolve_session_write_update_path(Path("/does/not/matter"), str(path)) == path.resolve()
 
 
+def test_session_file_read_payload_builds_html_preview_url_only_for_html() -> None:
+    html_payload = session_file_read_payload(
+        session_id="sid",
+        path_obj=Path("/tmp/docs/my report.html"),
+        rel="docs/my report.html",
+        view=ClientFileView(kind="html", size=12, text="<h1>preview</h1>", editable=True, version="v1"),
+        git_path=False,
+    )
+    assert html_payload["preview_url"] == "/api/sessions/sid/file/raw/docs/my%20report.html"
+    for kind, name in (("markdown", "notes.md"), ("text", "notes.txt")):
+        payload = session_file_read_payload(
+            session_id="sid",
+            path_obj=Path("/tmp") / name,
+            rel=name,
+            view=ClientFileView(kind=kind, size=5, text="text", editable=True, version="v1"),
+            git_path=False,
+        )
+        assert "preview_url" not in payload
+
+
 def test_session_file_read_payload_builds_git_aware_video_urls() -> None:
     payload = session_file_read_payload(
         session_id="sid",
@@ -155,6 +182,29 @@ class _FakeHandler:
 
     def _unauthorized(self) -> None:
         self.unauthorized = True
+
+
+class _StreamingHandler(_FakeHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.headers: dict[str, str] = {}
+        self.status: int | None = None
+        self.sent_headers: list[tuple[str, str]] = []
+        self.wfile = io.BytesIO()
+        self.error: tuple[int, str] | None = None
+
+    def send_response(self, status: int) -> None:
+        self.status = status
+
+    def send_header(self, name: str, value: str) -> None:
+        self.sent_headers.append((name, value))
+
+    def end_headers(self) -> None:
+        return None
+
+    def send_error(self, status: int, message: str = "") -> None:
+        self.status = status
+        self.error = (status, message)
 
 
 class _FakeManager:
@@ -265,6 +315,179 @@ def test_handle_file_get_route_session_read_records_file() -> None:
         ]
         assert manager.refreshed == ["s"]
         assert manager.recorded == [("s", str(path))]
+
+
+def test_session_file_read_reports_html_kind_and_preserves_existing_kinds() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        files = {
+            "page.html": b"<p>html</p>",
+            "page.htm": b"<p>htm</p>",
+            "page.HTML": b"<p>uppercase</p>",
+            "notes.md": b"# notes\n",
+            "notes.txt": b"text\n",
+            "icon.png": b"\x89PNG\r\n\x1a\nbytes",
+        }
+        expected_kinds = {
+            "page.html": "html",
+            "page.htm": "html",
+            "page.HTML": "html",
+            "notes.md": "markdown",
+            "notes.txt": "text",
+            "icon.png": "image",
+        }
+        for name, raw in files.items():
+            (base / name).write_bytes(raw)
+        manager = _FakeManager(str(base))
+        deps, responses, _inline, _attachments = _file_get_deps(
+            resolve_existing_session_file=resolve_existing_session_file,
+            read_client_file_view=read_client_file_view,
+        )
+        for name, expected_kind in expected_kinds.items():
+            assert handle_file_get_route(
+                _FakeHandler(),
+                path="/api/sessions/s/file/read",
+                query=urllib.parse.urlencode({"path": name}),
+                manager=manager,
+                deps=deps,
+                match_session_route=_match_session_route,
+            ) is True
+            status, payload = responses.pop()
+            assert status == 200
+            assert payload["kind"] == expected_kind
+            if expected_kind == "html":
+                assert payload["preview_url"] == f"/api/sessions/s/file/raw/{name}"
+            else:
+                assert "preview_url" not in payload
+
+
+def test_session_file_raw_route_decodes_paths_streams_sandboxed_documents_and_preserves_relative_urls() -> None:
+    with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as outside_td:
+        base = Path(td)
+        document = base / "docs" / "my report.html"
+        image = base / "docs" / "img" / "x.png"
+        document.parent.mkdir()
+        image.parent.mkdir()
+        document.write_text("<h1>preview</h1>", encoding="utf-8")
+        image.write_bytes(b"png")
+        external = Path(outside_td) / "outside.xhtml"
+        external.write_text("<html></html>", encoding="utf-8")
+        manager = _FakeManager(str(base))
+        deps, responses, _inline, _attachments = _file_get_deps(
+            resolve_existing_session_file=resolve_existing_session_file,
+            send_inline_file_response=send_inline_file_response,
+        )
+
+        handler = _StreamingHandler()
+        document_url = "/api/sessions/s/file/raw/docs/my%20report.html"
+        assert handle_file_get_route(
+            handler,
+            path=document_url,
+            query="",
+            manager=manager,
+            deps=deps,
+            match_session_route=_match_session_route,
+        ) is True
+        assert responses == []
+        assert handler.status == 200
+        assert dict(handler.sent_headers)["Content-Type"] == "text/html; charset=utf-8"
+        assert dict(handler.sent_headers)["X-Content-Type-Options"] == "nosniff"
+        assert dict(handler.sent_headers)["Content-Security-Policy"] == "sandbox allow-same-origin"
+        assert handler.wfile.getvalue() == b"<h1>preview</h1>"
+
+        sibling_url = urllib.parse.urljoin(document_url, "img/x.png")
+        assert sibling_url == "/api/sessions/s/file/raw/docs/img/x.png"
+        sibling_match = match_session_file_raw_route(sibling_url)
+        assert sibling_match == ("s", ("docs", "img", "x.png"))
+        assert decode_session_raw_file_path(sibling_match[1]) == "docs/img/x.png"
+        image_handler = _StreamingHandler()
+        assert handle_file_get_route(
+            image_handler,
+            path=sibling_url,
+            query="",
+            manager=manager,
+            deps=deps,
+            match_session_route=_match_session_route,
+        ) is True
+        assert image_handler.status == 200
+        assert dict(image_handler.sent_headers)["Content-Type"] == "image/png"
+        assert dict(image_handler.sent_headers)["X-Content-Type-Options"] == "nosniff"
+        assert "Content-Security-Policy" not in dict(image_handler.sent_headers)
+
+        absolute_handler = _StreamingHandler()
+        absolute_url = f"/api/sessions/s/file/raw/{encode_session_raw_file_path(str(external))}"
+        assert absolute_url.startswith("/api/sessions/s/file/raw//")
+        assert handle_file_get_route(
+            absolute_handler,
+            path=absolute_url,
+            query="",
+            manager=manager,
+            deps=deps,
+            match_session_route=_match_session_route,
+        ) is True
+        assert absolute_handler.status == 200
+        assert dict(absolute_handler.sent_headers)["Content-Type"] == "application/xhtml+xml; charset=utf-8"
+        assert dict(absolute_handler.sent_headers)["Content-Security-Policy"] == "sandbox allow-same-origin"
+
+
+def test_session_file_raw_route_maps_auth_session_and_resolution_errors() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        (base / "directory").mkdir()
+        manager = _FakeManager(str(base))
+        deps, responses, _inline, _attachments = _file_get_deps(resolve_existing_session_file=resolve_existing_session_file)
+
+        unauth_handler = _FakeHandler()
+        unauth_deps, _unauth_responses, _inline, _attachments = _file_get_deps(
+            require_auth=lambda _handler: False,
+            resolve_existing_session_file=resolve_existing_session_file,
+        )
+        assert handle_file_get_route(
+            unauth_handler,
+            path="/api/sessions/s/file/raw/missing.html",
+            query="",
+            manager=manager,
+            deps=unauth_deps,
+            match_session_route=_match_session_route,
+        ) is True
+        assert unauth_handler.unauthorized is True
+
+        class MissingSessionManager(_FakeManager):
+            def get_session(self, _session_id: str) -> object | None:
+                return None
+
+        assert handle_file_get_route(
+            _FakeHandler(),
+            path="/api/sessions/missing/file/raw/page.html",
+            query="",
+            manager=MissingSessionManager(str(base)),
+            deps=deps,
+            match_session_route=_match_session_route,
+        ) is True
+        assert responses == [(404, {"error": "unknown session"})]
+        responses.clear()
+
+        for raw_path, expected_status, expected_error in (
+            ("missing.html", 404, "file not found"),
+            ("directory", 400, "path is not a file"),
+        ):
+            assert handle_file_get_route(
+                _FakeHandler(),
+                path=f"/api/sessions/s/file/raw/{encode_session_raw_file_path(raw_path)}",
+                query="",
+                manager=manager,
+                deps=deps,
+                match_session_route=_match_session_route,
+            ) is True
+            assert responses == [(expected_status, {"error": expected_error})]
+            responses.clear()
+
+
+def test_session_raw_file_path_codec_round_trips_utf8_and_surrogate_bytes() -> None:
+    raw_byte_name = b"bad-\xff.html".decode("utf-8", "surrogateescape")
+    for rel in ("report.html", "docs/my report.html", "a/b/c.css", "données/éclair.html", raw_byte_name):
+        encoded = encode_session_raw_file_path(rel)
+        assert decode_session_raw_file_path(tuple(encoded.split("/"))) == rel
 
 
 def test_handle_absolute_file_preview_route_streams_previewable_blob() -> None:
@@ -453,6 +676,22 @@ def _global_file_deps(body, **overrides):
     for name, value in overrides.items():
         object.__setattr__(deps, name, value)
     return deps, responses
+
+
+def test_global_file_inspect_reports_html_kind_for_html_extensions() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        for name in ("page.html", "page.htm", "page.HTML"):
+            path = base / name
+            path.write_text("<p>preview</p>", encoding="utf-8")
+            deps, responses = _global_file_deps(
+                {"path": str(path), "session_id": "s"},
+                resolve_client_file_path=lambda **_kwargs: path,
+                read_client_file_view=read_client_file_view,
+            )
+            assert handle_global_file_post_route(_FakeHandler(), path="/api/files/inspect", manager=_FakeManager(str(base)), deps=deps)
+            assert responses[0][0] == 200
+            assert responses[0][1]["kind"] == "html"
 
 
 def test_handle_global_file_post_route_rejects_non_string_session_id_before_resolution() -> None:

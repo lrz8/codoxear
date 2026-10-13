@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 MARKDOWN_EXTENSIONS = frozenset({"md", "markdown", "mdown", "mkd"})
+HTML_EXTENSIONS = frozenset({"html", "htm"})
 VIDEO_CONTENT_TYPES = {
     ".3gp": "video/3gpp",
     ".avi": "video/x-msvideo",
@@ -61,6 +62,44 @@ TEXTUAL_EXTENSIONS = frozenset(
     }
 )
 TEXTUAL_FILENAMES = frozenset({"dockerfile", "license", "makefile", "readme"})
+
+RAW_FILE_CONTENT_TYPES = {
+    "html": "text/html; charset=utf-8",
+    "htm": "text/html; charset=utf-8",
+    "xhtml": "application/xhtml+xml; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "js": "text/javascript; charset=utf-8",
+    "mjs": "text/javascript; charset=utf-8",
+    "json": "application/json; charset=utf-8",
+    "svg": "image/svg+xml; charset=utf-8",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "avif": "image/avif",
+    "ico": "image/x-icon",
+    "woff": "font/woff",
+    "woff2": "font/woff2",
+    "ttf": "font/ttf",
+    "otf": "font/otf",
+    "ogg": "audio/ogg",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+}
+
+
+def raw_file_content_type(path: Path) -> str:
+    ext = path.suffix.lower().lstrip(".")
+    content_type = RAW_FILE_CONTENT_TYPES.get(ext)
+    if content_type is not None:
+        return content_type
+    video_type = VIDEO_CONTENT_TYPES.get(path.suffix.lower())
+    if video_type is not None:
+        return video_type
+    if ext in TEXTUAL_EXTENSIONS:
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
 
 
 def sniff_image_ext(raw: bytes) -> str | None:

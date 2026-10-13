@@ -13,9 +13,31 @@ from .git_ops import path_token_query
 from .git_ops import path_token_response_fields
 from .file_complete import FileCompletionResult
 from .file_complete import complete_session_path
+from .file_types import raw_file_content_type
 from .image_dimensions import read_image_dimensions
 from .file_view import ClientFileView
+from .server_routing import match_session_file_raw_route
 from .video_preview import video_response_payload
+
+
+_UNRESERVED_URL_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _encode_url_path_segment(segment: str) -> str:
+    raw = segment.encode("utf-8", "surrogateescape")
+    return "".join(chr(byte) if byte in _UNRESERVED_URL_BYTES else f"%{byte:02X}" for byte in raw)
+
+
+def encode_session_raw_file_path(rel: str) -> str:
+    """Encode a session path so every decoded segment round-trips its raw bytes."""
+    return "/".join(_encode_url_path_segment(segment) for segment in rel.split("/"))
+
+
+def decode_session_raw_file_path(segments: tuple[str, ...]) -> str:
+    decoded = tuple(urllib.parse.unquote_to_bytes(segment).decode("utf-8", "surrogateescape") for segment in segments)
+    if decoded[0] == "":
+        return "/" + "/".join(decoded[1:])
+    return "/".join(decoded)
 
 
 def session_file_read_payload(
@@ -78,7 +100,7 @@ def session_file_read_payload(
             "reason": view.blocked_reason,
             "viewer_max_bytes": view.viewer_max_bytes,
         }
-    return {
+    payload = {
         "ok": True,
         "kind": view.kind,
         "path": path_text,
@@ -89,6 +111,9 @@ def session_file_read_payload(
         "editable": bool(view.editable),
         "version": view.version,
     }
+    if view.kind == "html":
+        payload["preview_url"] = f"/api/sessions/{session_id}/file/raw/{encode_session_raw_file_path(rel)}"
+    return payload
 
 
 JsonResponse = Callable[[Any, int, dict[str, Any]], None]
@@ -114,7 +139,7 @@ class FileGetRouteDeps:
     ensure_video_preview: Callable[[Path], Path]
     inspect_downloadable_file: Callable[[Path], int]
     download_disposition: Callable[[Path], str]
-    send_inline_file_response: Callable[[Any, Path, str], None]
+    send_inline_file_response: Callable[..., None]
     send_attachment_file_response: Callable[..., None]
     file_search_limit: int
     read_image_dimensions: Callable[[Path], tuple[int, int]] = read_image_dimensions
@@ -130,6 +155,12 @@ def handle_file_get_route(
     deps: FileGetRouteDeps,
     match_session_route: RouteMatcher,
 ) -> bool:
+    raw_route = match_session_file_raw_route(path)
+    if raw_route is not None:
+        session_id, encoded_segments = raw_route
+        _handle_session_file_raw(handler, session_id=session_id, encoded_segments=encoded_segments, manager=manager, deps=deps)
+        return True
+
     session_id = match_session_route(path, "file", "read")
     if session_id is not None:
         _handle_session_file_read(handler, session_id=session_id, query=query, manager=manager, deps=deps)
@@ -265,6 +296,33 @@ def _map_resolve_error(handler: Any, exc: BaseException, deps: FileGetRouteDeps,
         deps.json_response(handler, runtime_status, {"error": str(exc)})
         return
     raise exc
+
+
+def _handle_session_file_raw(
+    handler: Any,
+    *,
+    session_id: str,
+    encoded_segments: tuple[str, ...],
+    manager: Any,
+    deps: FileGetRouteDeps,
+) -> None:
+    session = _session(handler, session_id=session_id, manager=manager, deps=deps)
+    if session is None:
+        return
+    rel = decode_session_raw_file_path(encoded_segments)
+    try:
+        path_obj = deps.resolve_existing_session_file(deps.resolve_session_cwd(session.cwd), rel)
+    except (FileNotFoundError, PermissionError, ValueError, RuntimeError) as e:
+        _map_resolve_error(handler, e, deps)
+        return
+    content_type = raw_file_content_type(path_obj)
+    extra_headers = {"X-Content-Type-Options": "nosniff"}
+    if content_type.split(";", 1)[0] in {"text/html", "application/xhtml+xml", "image/svg+xml"}:
+        # Session-cwd documents share the authenticated origin; sandboxing direct
+        # navigation prevents their scripts while allow-same-origin keeps relative
+        # subresource requests eligible for the SameSite=Strict auth cookie.
+        extra_headers["Content-Security-Policy"] = "sandbox allow-same-origin"
+    deps.send_inline_file_response(handler, path_obj, content_type, extra_headers=extra_headers)
 
 
 def _handle_session_file_read(handler: Any, *, session_id: str, query: str, manager: Any, deps: FileGetRouteDeps) -> None:
