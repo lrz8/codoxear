@@ -14,6 +14,13 @@ def _init_server_runtime():
     server._init_runtime()
     yield
 
+@pytest.fixture(autouse=True)
+def _isolated_send_journal(tmp_path, monkeypatch):
+    """Keep coordinator graphs built during a test off the real app dir's send journal."""
+    from codoxear import server
+    monkeypatch.setattr(server, "SEND_JOURNAL_DIR", tmp_path / "send_journal")
+
+
 # The source-text-test recovery uses neutral assertion names in files that load
 # source code for executable Node VM or import-based behavior checks.  Keeping
 # the aliases here preserves unittest's assertion diagnostics without allowing

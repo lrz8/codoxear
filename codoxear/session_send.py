@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, MutableMapping
+from typing import Any, Callable, MutableMapping, TextIO
 
 from .file_upload import attachment_inject_text
+from .send_journal import SendJournal
 
 from .session_input import apply_confirmed_send_success
 from .session_input import parse_confirmed_send_response
@@ -54,6 +55,53 @@ class SessionSendCoordinator:
     commit_unknown_error: type[BaseException]
     injection_error: type[BaseException]
     timeout_errors: tuple[type[BaseException], ...]
+    journal: SendJournal
+    stderr: TextIO
+
+    def _journal_submit(
+        self,
+        session_id: str,
+        *,
+        text: str,
+        display_text: str,
+        attachment_paths: list[str],
+        queue_item_id: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Write the submit row ahead of dispatch; return ``(journal_id, warning)``.
+
+        A queued item was journaled at enqueue time under its queue item id, so
+        its dispatch only reuses that id. Journal failures never block a send.
+        """
+        if queue_item_id is not None:
+            return queue_item_id, None
+        try:
+            return (
+                self.journal.record_submit(
+                    session_id,
+                    source="send",
+                    text=text,
+                    display_text=display_text,
+                    attachment_paths=attachment_paths,
+                ),
+                None,
+            )
+        except Exception as exc:  # a journal fault must never block the send
+            message = f"send journal submit: {_tail_error_message(exc)}"
+            self.stderr.write(f"error: {message} (session {session_id})\n")
+            self.stderr.flush()
+            return None, message
+
+    def _journal_outcome(self, session_id: str, journal_id: str | None, outcome: str, error: str | None = None) -> str | None:
+        if journal_id is None:
+            return None
+        try:
+            self.journal.record_outcome(session_id, journal_id, outcome, error)
+        except Exception as exc:  # a journal fault must never block the send
+            message = f"send journal outcome: {_tail_error_message(exc)}"
+            self.stderr.write(f"error: {message} (session {session_id})\n")
+            self.stderr.flush()
+            return message
+        return None
 
     def send(self, session_id: str, text: str, *, allow_pending_attachment: bool = False, queue_item_id: str | None = None) -> dict[str, Any]:
         input_lock = self.input_lock_for_session(session_id)
@@ -88,7 +136,19 @@ class SessionSendCoordinator:
             )
             committed_text = f"{attachment_prefix}{text}" if attachment_prefix else text
 
+            journal_id, journal_warning = self._journal_submit(
+                session_id,
+                text=committed_text,
+                display_text=text,
+                attachment_paths=[str(entry.get("path") or "") for entry in staged_entries],
+                queue_item_id=queue_item_id,
+            )
+            outcome_recorded = False
+
             def raise_commit_unknown(message: str, cause: BaseException | None = None) -> None:
+                nonlocal outcome_recorded
+                outcome_recorded = True
+                self._journal_outcome(session_id, journal_id, "commit_unknown", message)
                 if queue_item_id is None:
                     self.set_commit_unknown_send(
                         session_id,
@@ -99,21 +159,31 @@ class SessionSendCoordinator:
                 raise self.commit_unknown_error(message) from cause
 
             timeout_s = self.send_commit_timeout_seconds if self.send_commit_timeout_seconds > 0 else None
-            response = self.call_confirmed_send(
-                session_id,
-                session=session,
-                sock=sock,
-                text=committed_text,
-                timeout_s=timeout_s,
-                raise_commit_unknown=raise_commit_unknown,
-                not_ready_error=self.not_ready_error,
-                timeout_errors=self.timeout_errors,
-            )
-            parsed_send = parse_confirmed_send_response(
-                response,
-                raise_commit_unknown=raise_commit_unknown,
-                injection_error=self.injection_error,
-            )
+            try:
+                response = self.call_confirmed_send(
+                    session_id,
+                    session=session,
+                    sock=sock,
+                    text=committed_text,
+                    timeout_s=timeout_s,
+                    raise_commit_unknown=raise_commit_unknown,
+                    not_ready_error=self.not_ready_error,
+                    timeout_errors=self.timeout_errors,
+                )
+                parsed_send = parse_confirmed_send_response(
+                    response,
+                    raise_commit_unknown=raise_commit_unknown,
+                    injection_error=self.injection_error,
+                )
+            except Exception as exc:
+                if not outcome_recorded:
+                    outcome = "commit_unknown" if isinstance(exc, self.commit_unknown_error) else "error"
+                    self._journal_outcome(session_id, journal_id, outcome, _tail_error_message(exc))
+                raise
+            outcome_warning = self._journal_outcome(session_id, journal_id, "ack")
+            for warning in (journal_warning, outcome_warning):
+                if warning:
+                    response = _add_send_warning(response, "send_journal_error", warning)
             with self.lock:
                 try:
                     self.record_prelog_user_message(session, committed_text)

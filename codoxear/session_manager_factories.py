@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from .broker_watchdog import BrokerWatchdogCoordinator
 from .queue_sweep import QueueSweepCoordinator
+from .send_journal import SendJournal
 from .session_discovery import DiscoveryDeps
 from .session_cleanup import SessionCleanupCoordinator
 from .session_control import SessionControlCoordinator
@@ -64,6 +65,7 @@ class QueueFactoryDeps:
     not_ready_error: Any
     now: Any
     queue_idle_grace_seconds: float
+    send_journal: Any
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,8 @@ class UnattendedConfigFactoryDeps:
 @dataclass(frozen=True)
 class CleanupFactoryDeps:
     unlink_quiet: Any
+    send_journal: Any
+    stderr: Any
 
 
 @dataclass(frozen=True)
@@ -238,6 +242,8 @@ class SendFactoryDeps:
     now: Any
     send_commit_timeout_seconds: float
     socket_timeout: Any
+    send_journal: Any
+    stderr: Any
 
 
 @dataclass(frozen=True)
@@ -318,6 +324,7 @@ class SessionManagerCoordinatorDeps:
 
 def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDeps:
     """Capture focused coordinator dependencies once at the composition root."""
+    send_journal = SendJournal(server.SEND_JOURNAL_DIR)
     return SessionManagerCoordinatorDeps(
         discovery_deps=DiscoveryFactoryDeps(
             broker_interrupted_idle_from_state=server._broker_interrupted_idle_from_state,
@@ -335,6 +342,7 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
             not_ready_error=server.SessionNotReadyError,
             now=server.time.time,
             queue_idle_grace_seconds=server.QUEUE_IDLE_GRACE_SECONDS,
+            send_journal=send_journal,
         ),
         control_coordinator=ControlFactoryDeps(
             broker_interrupted_idle_from_state=server._broker_interrupted_idle_from_state,
@@ -417,6 +425,8 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
         ),
         cleanup_coordinator=CleanupFactoryDeps(
             unlink_quiet=server._unlink_quiet,
+            send_journal=send_journal,
+            stderr=server.sys.stderr,
         ),
         pending_state_coordinator=PendingStateFactoryDeps(
             commit_unknown_orphan_prune_seconds=server.COMMIT_UNKNOWN_ORPHAN_PRUNE_SECONDS,
@@ -471,6 +481,8 @@ def session_manager_coordinator_deps(server: Any) -> SessionManagerCoordinatorDe
             now=server.time.time,
             send_commit_timeout_seconds=server.SEND_COMMIT_TIMEOUT_SECONDS,
             socket_timeout=server.socket.timeout,
+            send_journal=send_journal,
+            stderr=server.sys.stderr,
         ),
         prelog_user_message_recorder=PrelogRecorderFactoryDeps(
             clean_optional_text=server._clean_optional_text,
@@ -567,6 +579,7 @@ def queue_coordinator_for_manager(manager: Any, deps: QueueFactoryDeps) -> Any:
         queue_idle_grace_seconds=deps.queue_idle_grace_seconds,
         now=deps.now,
         recovery_items_locked=lambda session_id: manager._queue_has_recovery_items_locked(session_id),
+        journal=deps.send_journal,
     )
 
 
@@ -791,6 +804,14 @@ def unattended_config_coordinator_for_manager(manager: Any, deps: UnattendedConf
 
 
 def cleanup_coordinator_for_manager(manager: Any, deps: CleanupFactoryDeps) -> Any:
+    def remove_send_journal(session_id: str) -> None:
+        # A journal fault must not abort session deletion.
+        try:
+            deps.send_journal.remove(session_id)
+        except (OSError, ValueError) as exc:
+            deps.stderr.write(f"error: send journal remove failed for {session_id}: {type(exc).__name__}: {exc}\n")
+            deps.stderr.flush()
+
     return SessionCleanupCoordinator(
         lock=_registry_lock(manager),
         sessions=lambda: _registry_sessions(manager),
@@ -808,6 +829,7 @@ def cleanup_coordinator_for_manager(manager: Any, deps: CleanupFactoryDeps) -> A
         save_queues=manager._save_queues,
         save_drafts=manager._save_drafts,
         clear_unread=lambda session_id: getattr(manager, "_unread_store", None).clear(session_id) if getattr(manager, "_unread_store", None) is not None else None,
+        remove_send_journal=remove_send_journal,
     )
 
 
@@ -938,6 +960,8 @@ def send_coordinator_for_manager(manager: Any, deps: SendFactoryDeps) -> Any:
         commit_unknown_error=deps.commit_unknown_error,
         injection_error=deps.injection_error,
         timeout_errors=(TimeoutError, deps.socket_timeout),
+        journal=deps.send_journal,
+        stderr=deps.stderr,
     )
 
 

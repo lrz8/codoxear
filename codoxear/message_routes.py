@@ -32,6 +32,9 @@ RouteMatcher = Callable[[str, str, str], str | None]
 # that the pre-extraction server wrapper applied to this exact call path.
 LIVE_POLL_READ_MAX_BYTES = 2 * 1024 * 1024
 
+SENT_HISTORY_DEFAULT_LIMIT = 20
+SENT_HISTORY_MAX_LIMIT = 100
+
 
 @dataclass(frozen=True)
 class MessageRouteDeps:
@@ -639,6 +642,10 @@ def handle_messages_get_route(
     if session_id is not None:
         handle_messages_search(handler, session_id=session_id, query=query, manager=manager, deps=deps)
         return True
+    session_id = match_session_route(path, "sent-history")
+    if session_id is not None:
+        handle_sent_history(handler, session_id=session_id, query=query, manager=manager, deps=deps)
+        return True
     for route_name, route_handler in MESSAGE_GET_ROUTES:
         session_id = match_session_route(path, "messages", route_name)
         if session_id is None:
@@ -646,6 +653,31 @@ def handle_messages_get_route(
         route_handler(handler, session_id=session_id, query=query, manager=manager, deps=deps)
         return True
     return False
+
+
+def handle_sent_history(handler: Any, *, session_id: str, query: str, manager: Any, deps: MessageRouteDeps) -> None:
+    """Newest-first prompts this session was asked to send, from the write-ahead send journal.
+
+    Served from the journal alone, so a send the backend never logged stays
+    recoverable, and a session that is no longer live still answers.
+    """
+    if not deps.require_auth(handler):
+        handler._unauthorized()
+        return
+    qs = urllib.parse.parse_qs(query)
+    limit, limit_error = _parse_bounded_query_int(
+        qs, "limit", default=SENT_HISTORY_DEFAULT_LIMIT, min_value=1, max_value=SENT_HISTORY_MAX_LIMIT
+    )
+    if limit_error is not None:
+        deps.json_response(handler, 400, {"error": limit_error})
+        return
+    cursor = (qs.get("cursor") or [""])[0] or None
+    try:
+        entries, next_cursor = manager.sent_history(session_id, cursor=cursor, limit=limit)
+    except ValueError as e:
+        deps.json_response(handler, 400, {"error": str(e)})
+        return
+    deps.json_response(handler, 200, {"entries": [entry.to_json() for entry in entries], "next_cursor": next_cursor})
 
 
 def handle_messages_export(handler: Any, *, session_id: str, query: str = "", manager: Any, deps: MessageRouteDeps) -> None:

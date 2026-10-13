@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 import time
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Mapping, MutableMapping, TextIO
 
 from .queue_runtime import clear_queue_promotion
 from .queue_runtime import queue_idle_grace_ready
@@ -11,6 +12,7 @@ from .queue_runtime import reset_queue_idle
 from .queue_runtime import start_queue_promotion
 from .queue_store import QueueMap
 from .queue_store import QueueStore
+from .send_journal import SendJournal
 from .session_model import Session
 
 
@@ -31,6 +33,10 @@ class SessionQueueCoordinator:
     queue_idle_grace_seconds: float
     now: Callable[[], float] = time.time
     recovery_items_locked: Callable[[str], bool] | None = None
+    # Enqueued prompts are journaled here under their queue item id; the later
+    # dispatch through ``send`` appends only the outcome row for that id.
+    journal: SendJournal | None = None
+    stderr: TextIO = sys.stderr
 
     def _recovery_items_locked(self, session_id: str) -> bool:
         if self.recovery_items_locked is not None:
@@ -106,12 +112,34 @@ class SessionQueueCoordinator:
                 if not session.sync_send_supported:
                     raise self.not_ready_error("broker must be restarted before queueing prompts")
             item, queue_len = self.append_item_local(session_id, text, reject_recovery_barrier=True)
-        if queue_len != 1:
-            return {"queued": True, "queue_len": int(queue_len), "item": item}
-        response = self.promote_head_if_sendable(session_id, require_idle_grace=False, expected_item_id=str(item["id"]))
-        if isinstance(response, dict):
-            return response
-        return {"queued": True, "queue_len": 1, "item": item}
+            journal_warning = self._journal_enqueue(session_id, item)
+        response: dict[str, Any] | None = None
+        if queue_len == 1:
+            response = self.promote_head_if_sendable(session_id, require_idle_grace=False, expected_item_id=str(item["id"]))
+        if not isinstance(response, dict):
+            response = {"queued": True, "queue_len": int(queue_len), "item": item}
+        if journal_warning:
+            response = {**response, "send_journal_error": journal_warning}
+        return response
+
+    def _journal_enqueue(self, session_id: str, item: dict[str, Any]) -> str | None:
+        if self.journal is None:
+            return None
+        try:
+            self.journal.record_submit(
+                session_id,
+                source="enqueue",
+                text=str(item["text"]),
+                display_text=str(item["text"]),
+                queue_item_id=str(item["id"]),
+                entry_id=str(item["id"]),
+            )
+        except Exception as exc:  # a journal fault must never block the enqueue
+            message = f"send journal submit: {exc}"
+            self.stderr.write(f"error: {message} (session {session_id})\n")
+            self.stderr.flush()
+            return message
+        return None
 
     def delete_local(
         self,

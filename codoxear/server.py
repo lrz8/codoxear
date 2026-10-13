@@ -1442,6 +1442,9 @@ class SessionManager:
             queue_item_id=queue_item_id,
         )
 
+    def sent_history(self, session_id: str, *, cursor: str | None, limit: int) -> Any:
+        return self._send_coordinator_for_manager().journal.history(session_id, cursor=cursor, limit=limit)
+
     def _refresh_session_meta_if_sidecar_exists(self, session_id: str, *, drain_queue: bool = False) -> None:
         registry = _session_registry_for_manager(self)
         with registry.lock:

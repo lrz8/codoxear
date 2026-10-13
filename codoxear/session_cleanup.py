@@ -26,6 +26,7 @@ class SessionCleanupCoordinator:
     save_drafts: Callable[[], None] = lambda: None
     save_staged_attachments: Callable[[], None] = lambda: None
     clear_unread: Callable[[str], None] = lambda _session_id: None
+    remove_send_journal: Callable[[str], None] = lambda _session_id: None
 
     def prune_stale_socket_without_metadata(self, session_id: str, sock: Path) -> None:
         with self.lock:
@@ -41,6 +42,10 @@ class SessionCleanupCoordinator:
             if isinstance(input_locks, dict):
                 input_locks.pop(session_id, None)
         self.clear_unread(session_id)
+        if clear_recovery:
+            # The send journal is the recovery record for eaten sends, so only an
+            # explicit session delete removes it; pruning a dead session keeps it.
+            self.remove_send_journal(session_id)
         self.store().save_deleted_session_state_changes(
             changes,
             save_pending_attachments=self.save_pending_attachments,

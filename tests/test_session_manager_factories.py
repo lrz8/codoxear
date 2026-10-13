@@ -40,6 +40,7 @@ def test_manager_dependencies_are_focused_per_coordinator() -> None:
         "not_ready_error",
         "now",
         "queue_idle_grace_seconds",
+        "send_journal",
     }
     assert not hasattr(deps.queue_coordinator, "tmux_session_name")
     assert deps.web_launch_coordinator.homes == {

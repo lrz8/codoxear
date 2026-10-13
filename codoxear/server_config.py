@@ -21,6 +21,7 @@ SERVER_CONFIG_EXPORT_NAMES = (
     "HMAC_SECRET_PATH",
     "LAUNCH_ATTEMPTS_PATH",
     "UPLOAD_DIR",
+    "SEND_JOURNAL_DIR",
     "UNATTENDED_PATH",
     "ALIAS_PATH",
     "SIDEBAR_META_PATH",
@@ -102,6 +103,7 @@ class ServerConfig:
     HMAC_SECRET_PATH: Path
     LAUNCH_ATTEMPTS_PATH: Path
     UPLOAD_DIR: Path
+    SEND_JOURNAL_DIR: Path
     UNATTENDED_PATH: Path
     ALIAS_PATH: Path
     SIDEBAR_META_PATH: Path
@@ -264,6 +266,7 @@ def build_server_config(
         HMAC_SECRET_PATH=app_dir / "hmac_secret",
         LAUNCH_ATTEMPTS_PATH=launch_attempts_path(app_dir),
         UPLOAD_DIR=app_dir / "uploads",
+        SEND_JOURNAL_DIR=app_dir / "send_journal",
         UNATTENDED_PATH=app_dir / "unattended.json",
         ALIAS_PATH=app_dir / "session_aliases.json",
         SIDEBAR_META_PATH=app_dir / "session_sidebar.json",
