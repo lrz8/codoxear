@@ -27,6 +27,7 @@ from codoxear.broker_launch import SHELL_PRE_EXEC_MARKER_BYTES
 from codoxear.broker_launch import _agent_exec_argv_and_env
 from codoxear.broker_launch import _agent_shell_command
 from codoxear.broker_launch import _attach_pty_slave
+from codoxear.broker_launch import _ensure_pi_approve_args as _ensure_pi_approve_args_impl
 from codoxear.broker_launch import _ensure_pi_bridge_args as _ensure_pi_bridge_args_impl
 from codoxear.broker_launch import _ensure_pi_session_arg as _ensure_pi_session_arg_impl
 from codoxear.broker_launch import _expand_cwd
@@ -199,6 +200,10 @@ def _ensure_pi_bridge_args(*, args: list[str], marker_path: Path) -> list[str]:
     return _ensure_pi_bridge_args_impl(args=args, marker_path=marker_path, agent_backend=AGENT_BACKEND)
 
 
+def _ensure_pi_approve_args(*, args: list[str]) -> list[str]:
+    return _ensure_pi_approve_args_impl(args=args, agent_backend=AGENT_BACKEND, agent_bin=AGENT_BIN)
+
+
 def _ensure_pi_session_arg(*, args: list[str], cwd: str, sessions_dir: Path) -> list[str]:
     return _ensure_pi_session_arg_impl(args=args, cwd=cwd, sessions_dir=sessions_dir, agent_backend=AGENT_BACKEND)
 
@@ -341,6 +346,7 @@ class Broker:
             _reset_pi_active_session_marker(self.pi_active_session_marker_path)
         base_args = _ensure_pi_session_arg(args=codex_args, cwd=self.cwd, sessions_dir=BACKEND.sessions_dir())
         base_args = _ensure_pi_bridge_args(args=base_args, marker_path=self.pi_active_session_marker_path)
+        base_args = _ensure_pi_approve_args(args=base_args)
         # Headless web sessions need different defaults for robust injection and log discovery.
         # These flags are only for the interactive Codex CLI.
         if OWNER_TAG == "web" and AGENT_BACKEND == "codex":

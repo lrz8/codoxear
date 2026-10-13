@@ -296,7 +296,9 @@ read -r -k 1 option
         fake_stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 9)
         with tempfile.TemporaryDirectory() as td, patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
             "os.environ", {"PI_HOME": td, "CODEX_WEB_RESUME_SESSION_ID": ""}, clear=False
-        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")):
+        ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch("codoxear.broker.BACKEND", get_agent_backend("pi")), patch(
+            "codoxear.broker_launch._pi_supports_approve", return_value=True
+        ):
             broker = Broker(cwd="/tmp/pi-work", codex_args=["--model", "gpt-5.4"])
             marker_env = os.environ.get("CODEX_WEB_PI_ACTIVE_SESSION_FILE")
 
@@ -304,7 +306,7 @@ read -r -k 1 option
             session_idx = broker.codex_args.index("--session")
             session_path = Path(broker.codex_args[session_idx + 1])
             self.assertTrue(str(session_path).startswith(str(Path(td) / "agent" / "sessions" / "--tmp-pi-work--")))
-            self.assertEqual(broker.codex_args[-2:], ["--extension", str(_pi_bridge_extension_path())])
+            self.assertEqual(broker.codex_args[-3:], ["--extension", str(_pi_bridge_extension_path()), "--approve"])
             self.assertEqual(marker_env, str(broker.pi_active_session_marker_path))
             self.assertIsNone(broker._resume_session_id)
 

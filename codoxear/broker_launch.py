@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pwd
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable
@@ -130,6 +132,39 @@ def _ensure_pi_bridge_args(*, args: list[str], marker_path: Path, agent_backend:
             return out
     os.environ["CODEX_WEB_PI_ACTIVE_SESSION_FILE"] = str(marker_path)
     out.extend(["--extension", bridge])
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def _pi_supports_approve(agent_bin: str) -> bool:
+    """Whether this Pi build accepts ``--approve``.
+
+    Pi builds that predate project trust treat ``--approve`` as an unknown option
+    and exit(1) at startup, so the flag may only be passed to a build that lists
+    it in ``--help``. The probe runs once per process; a failed probe withholds
+    the flag (Pi then behaves as it did before) and says so on stderr.
+    """
+    try:
+        result = subprocess.run([agent_bin, "--help"], capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"error: could not probe {agent_bin} --help for --approve support: {exc}", file=sys.stderr)
+        return False
+    return "--approve" in (result.stdout + result.stderr)
+
+
+def _ensure_pi_approve_args(*, args: list[str], agent_backend: str, agent_bin: str) -> list[str]:
+    """Trust project-local Pi resources for this run, so Pi never opens its trust dialog.
+
+    Codoxear sessions cannot see or answer that modal, and it swallows injected
+    sends. ``--approve`` is appended last: Pi would read a following bare token
+    as the value of a flag it does not know.
+    """
+    out = list(args)
+    if normalize_agent_backend(agent_backend) != "pi":
+        return out
+    if not _pi_supports_approve(agent_bin):
+        return out
+    out.append("--approve")
     return out
 
 

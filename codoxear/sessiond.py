@@ -19,6 +19,7 @@ from typing import Any
 
 from .agent_backend import get_agent_backend
 from .agent_backend import normalize_agent_backend
+from .broker_launch import _ensure_pi_approve_args
 from .broker_launch import _ensure_pi_bridge_args
 from .broker_launch import _pi_active_session_marker_path
 from .broker_launch import PiActiveSessionMarkerObserver
@@ -408,6 +409,7 @@ class Sessiond:
                         marker_path=self.pi_active_session_marker_path,
                         agent_backend=AGENT_BACKEND,
                     )
+                launch_args = _ensure_pi_approve_args(args=launch_args, agent_backend=AGENT_BACKEND, agent_bin=AGENT_BIN)
                 argv = [AGENT_BIN, *launch_args]
                 os.execvp(argv[0], argv)
             except Exception:
