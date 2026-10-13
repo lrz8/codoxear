@@ -32,8 +32,13 @@ The fix follows the mechanism: make the per-kind default the *file's own documen
 - Rendering HTML into the markdown preview container — a document's own `<style>` would leak into the app chrome; only a frame gives CSS isolation.
 - Letting scripts run with the sandbox only on the iframe (no route CSP): leaves a direct-navigation gap on an authenticated origin. Rejected.
 
+## Defect found by the browser run and fixed
+
+The first real-browser run exposed that the preview *document* never loaded: `do_GET` dispatches `_handle_static_get` before the API chain, and `static_route_asset`'s servable-suffix fallback (`.html`, `.css`, `.js`, `.png`, `.svg`, `.json`, ...) claimed `/api/sessions/<id>/file/raw/<document>.html` as a static file, missed it under `static/`, and answered `send_error(404)`. The unit tests that passed were direct handler calls and therefore bypassed the dispatcher — the gap was in my *test level*, not only in the code. Fixed by excluding `/api` from the static fallback; pinned at `handle_static_get_route` (the decision point that swallowed it) and across the suffix set. Existing media routes never collided because they carry the path in the query string; the path-suffix URL shape this feature needs for native relative resolution is what made the collision reachable.
+
 ## Unexplained / residual risk
 
 - Keyboard focus inside the preview frame follows normal iframe semantics: after clicking into the preview, app-level vim/hint keys reach the frame, not the parent document. Accepted for now (no prior iframe existed, so nothing regressed); a mitigation would need a forwarding mechanism from the frame's document.
 - Failure surfaced, not yet root-caused: `tests/test_file_picker_session_state.py` broke during the client work purely because its fake dependency bag did not carry the new predicates; fixed by supplying them. No product implication.
-- Not yet verified in a real browser (Docker): the html preview's relative asset resolution, the CSS-isolated rendering, the picker/transcript entry paths end to end, and that a changed markdown row still opens as a diff. This is the open obligation.
+- Browser-verified after the routing fix: markdown preview from a transcript link, the source toggle, `src/main.py` source from the picker, the changed `README.md` diff row, and the line-targeted reference in source. Re-run pending for the html frame's relative image/CSS resolution with the routing fix in place.
+- Unexplained but not attributed to this change: Monaco's `TextModel got disposed before DiffEditorWidget model got reset` plus two `Canceled` fetch rows appeared in the rapid file-switching browser run. Both are consistent with by-design `AbortController` aborts and per-open editor re-creation; whether they also appear on a single-file open is being re-checked.

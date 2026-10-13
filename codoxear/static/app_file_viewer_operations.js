@@ -186,7 +186,10 @@
       if (viewMode === "preview" && previewUnavailable) setFileViewMode("file");
       const size = typeof result.size === "number" ? result.size : result.text.length;
       const statusParts = [path];
-      if (renderPreview) statusParts.push("preview");
+      // The html frame is sandboxed without allow-scripts, so a document that
+      // depends on JavaScript renders inert. Say so in the status rather than
+      // letting an inert page read as a broken preview.
+      if (renderPreview) statusParts.push(textKind === "html" ? "preview (scripts blocked)" : "preview");
       if (previewUnavailable) statusParts.push("preview unavailable");
       if (!currentActiveFileEditable()) statusParts.push("read-only");
       statusParts.push(fmtBytes(size));

@@ -60,6 +60,44 @@ def test_static_route_asset_maps_top_level_static_prefix_and_monaco_prefix() -> 
     assert static_route_asset("/api/me", top_level_static_assets=(("/", "index.html"),)) is None
 
 
+def test_static_route_asset_never_claims_the_api_namespace() -> None:
+    # The servable-suffix fallback exists so a new frontend module cannot fall
+    # through to the SPA fallback. It must not swallow API URLs: the raw
+    # document preview route ends in the document's own suffix (".../raw/docs/
+    # report.html") and its relative subresources end in ".png"/".css"/...,
+    # which are exactly the servable suffixes. Claiming one answers the file
+    # route with a static 404 before the API chain ever runs.
+    api_paths = [
+        "/api/sessions/s/file/raw/docs/report.html",
+        "/api/sessions/s/file/raw//abs/path/page.htm",
+        "/api/sessions/s/file/raw/docs/img/x.png",
+        "/api/sessions/s/file/raw/docs/style.css",
+        "/api/sessions/s/file/raw/docs/app.js",
+        "/api/sessions/s/file/raw/docs/icon.svg",
+        "/api/sessions/s/file/raw/docs/data.json",
+    ]
+    for api_path in api_paths:
+        assert static_route_asset(api_path, top_level_static_assets=(("/", "index.html"),)) is None, api_path
+
+
+def test_static_get_route_declines_document_preview_urls(tmp_path: Path) -> None:
+    handler = _FakeHandler()
+    assert (
+        handle_static_get_route(
+            handler,
+            path="/api/sessions/s/file/raw/docs/report.html",
+            query="",
+            deps=_deps(tmp_path),
+        )
+        is False
+    )
+    assert handler.errors == []
+    # The fallback still serves a genuinely new top-level frontend module.
+    module = tmp_path / "app_new_module.js"
+    module.write_text("export {};\n", encoding="utf-8")
+    assert handle_static_get_route(_FakeHandler(), path="/app_new_module.js", query="", deps=_deps(tmp_path)) is True
+
+
 def test_static_get_route_serves_html_headers_and_body(tmp_path: Path) -> None:
     index = tmp_path / "index.html"
     index.write_text("hello __CODOXEAR_ATTACH_MAX_BYTES__", encoding="utf-8")

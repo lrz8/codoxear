@@ -158,6 +158,14 @@ def static_route_asset(path: str, *, top_level_static_assets: tuple[tuple[str, s
         return path[len("/static/") :]
     if path.startswith("/monaco/"):
         return f"monaco/{path[len('/monaco/') :]}"
+    # The API namespace is owned by its own route chain, which runs after this
+    # handler and whose URLs legitimately end in a servable suffix (the raw
+    # document preview route ends in the document's own ".html", and its
+    # relative subresources end in ".png"/".css"/...). Claiming those paths
+    # here would answer them with a static-file 404 before the API ever sees
+    # them.
+    if path == "/api" or path.startswith("/api/"):
+        return None
     # Any real file present in the static dir with a servable extension is
     # served from the top level too, so a new frontend module can never fall
     # through to the SPA fallback (which broke boot when a file was added

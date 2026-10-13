@@ -216,10 +216,14 @@ process.stdout.write(JSON.stringify({
         self.assertEqual(result["withUrl"]["renderPreview"], True)
         self.assertEqual(result["withUrl"]["previewKind"], "html")
         self.assertEqual(result["withUrl"]["previewUrl"], "/api/sessions/s1/file/raw/docs/report.html")
-        self.assertIn("preview", result["withUrl"]["status"])
+        # The sandboxed frame never runs scripts, so the status says so instead
+        # of letting an inert JavaScript-dependent page read as a broken preview.
+        self.assertIn("preview (scripts blocked)", result["withUrl"]["status"])
         self.assertEqual(result["markdown"]["renderPreview"], True)
         self.assertEqual(result["markdown"]["previewKind"], "markdown")
         self.assertEqual(result["markdown"]["previewUrl"], "")
+        self.assertIn("preview", result["markdown"]["status"])
+        self.assertNotIn("scripts blocked", result["markdown"]["status"])
         self.assertEqual(result["sourceView"]["renderPreview"], False)
         self.assertEqual(result["plainText"]["renderPreview"], False)
         # No server document URL: source view, and the mode is corrected so the
@@ -394,12 +398,33 @@ const runtime = viewer.createFileViewerLifecycleRuntime(new Proxy(lifecycleOptio
         self.assertEqual(result["calls"][1]["mode"], None)
 
     def test_previewable_extension_sets_match_the_server(self) -> None:
+        from codoxear.file_text import document_kind
         from codoxear.file_types import HTML_EXTENSIONS, MARKDOWN_EXTENSIONS
 
+        # The client decides previewability from the path before a load; the
+        # server decides it from the loaded kind. Compare both directions of
+        # the same mapping, including the cases where "looks like a document"
+        # and "is the document kind" could drift (uppercase, dotfile, no
+        # extension, a document extension used as another extension's suffix).
+        samples = [
+            "docs/notes.md",
+            "a.MARKDOWN",
+            "x.mkd",
+            "page.html",
+            "page.HTM",
+            "src/main.py",
+            "notes.txt",
+            "docs/README",
+            ".md",
+            "notes.md.txt",
+            "img/pic.png",
+            "data.jsonl",
+        ]
         result = run_vm(
-            """
+            f"""
 const helpers = ctx.window.CodoxearFileHelpers;
-process.stdout.write(JSON.stringify({
+const samples = {json.dumps(samples)};
+process.stdout.write(JSON.stringify({{
   markdown: helpers.MARKDOWN_EXTENSIONS,
   html: helpers.HTML_EXTENSIONS,
   textKindHtml: helpers.isTextFileKind('html'),
@@ -414,7 +439,8 @@ process.stdout.write(JSON.stringify({
   previewPathText: helpers.isPreviewableFilePath('src/main.py'),
   previewPathDotfile: helpers.isPreviewableFilePath('.md'),
   previewPathNoExt: helpers.isPreviewableFilePath('docs/README'),
-}));
+  sampleFlags: samples.map((path) => helpers.isPreviewableFilePath(path)),
+}}));
 """,
             extra_scripts=(module_path("app_file_helpers.js"),),
         )
@@ -432,6 +458,12 @@ process.stdout.write(JSON.stringify({
         self.assertFalse(result["previewPathText"])
         self.assertFalse(result["previewPathDotfile"])
         self.assertFalse(result["previewPathNoExt"])
+        # The client path predicate must agree with the server's document kind,
+        # which is the authoritative classification the viewer renders from.
+        self.assertEqual(len(result["sampleFlags"]), len(samples))
+        for sample, client_flag in zip(samples, result["sampleFlags"]):
+            server_flag = document_kind(Path(sample)) in {"markdown", "html"}
+            self.assertEqual(client_flag, server_flag, f"previewability drift for {sample}")
 
 
 if __name__ == "__main__":

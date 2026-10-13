@@ -30,6 +30,7 @@ from codoxear.file_view import read_client_file_view
 from codoxear.file_response import send_inline_file_response
 from codoxear.path_runtime import resolve_existing_session_file
 from codoxear.file_get_routes import decode_session_raw_file_path
+from codoxear.file_types import RAW_FILE_CONTENT_TYPES
 from codoxear.file_get_routes import encode_session_raw_file_path
 from codoxear.server_routing import match_session_file_raw_route
 
@@ -488,6 +489,57 @@ def test_session_raw_file_path_codec_round_trips_utf8_and_surrogate_bytes() -> N
     for rel in ("report.html", "docs/my report.html", "a/b/c.css", "données/éclair.html", raw_byte_name):
         encoded = encode_session_raw_file_path(rel)
         assert decode_session_raw_file_path(tuple(encoded.split("/"))) == rel
+
+
+def test_session_file_raw_route_sandboxes_exactly_the_executable_document_types() -> None:
+    # The sandbox header is what keeps a session-cwd document from scripting on
+    # the authenticated origin, so it must follow the MIME table rather than a
+    # hand-checked list: every type a browser can execute as a document gets
+    # the CSP, and every other type does not. The executable set is spelled out
+    # here independently of the implementation, so adding a script-capable type
+    # to RAW_FILE_CONTENT_TYPES without sandboxing it fails this test.
+    executable_document_types = {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/xml",
+        "application/xml",
+        "text/xsl",
+    }
+    expected: dict[str, str] = {}
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        for extension, content_type in sorted(RAW_FILE_CONTENT_TYPES.items()):
+            name = f"asset.{extension}"
+            (base / name).write_text("x", encoding="utf-8")
+            expected[name] = content_type
+        # One textual extension and one unknown extension cover the fallbacks.
+        for name, content_type in (("notes.txt", "text/plain; charset=utf-8"), ("blob.bin", "application/octet-stream")):
+            (base / name).write_text("x", encoding="utf-8")
+            expected[name] = content_type
+        manager = _FakeManager(str(base))
+        deps, _responses, _inline, _attachments = _file_get_deps(
+            resolve_existing_session_file=resolve_existing_session_file,
+            send_inline_file_response=send_inline_file_response,
+        )
+        for name, content_type in expected.items():
+            handler = _StreamingHandler()
+            assert handle_file_get_route(
+                handler,
+                path=f"/api/sessions/s/file/raw/{name}",
+                query="",
+                manager=manager,
+                deps=deps,
+                match_session_route=_match_session_route,
+            ) is True
+            headers = dict(handler.sent_headers)
+            assert handler.status == 200, (name, handler.status)
+            assert headers["Content-Type"] == content_type, name
+            assert headers["X-Content-Type-Options"] == "nosniff", name
+            script_capable = content_type.split(";", 1)[0].strip() in executable_document_types
+            assert ("Content-Security-Policy" in headers) is script_capable, (name, content_type, headers)
+            if script_capable:
+                assert headers["Content-Security-Policy"] == "sandbox allow-same-origin", name
 
 
 def test_handle_absolute_file_preview_route_streams_previewable_blob() -> None:
