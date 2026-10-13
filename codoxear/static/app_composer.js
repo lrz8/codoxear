@@ -1,5 +1,6 @@
 import * as CodoxearPathCompletion from "./app_path_completion.js";
 import * as CodoxearFileHelpers from "./app_file_helpers.js";
+import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
 
   function requireFunction(value, name) {
     if (typeof value !== "function") throw new TypeError(`composer controller dependency missing: ${name}`);
@@ -314,6 +315,88 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       );
     }
 
+    function clearModelPickerGeometry() {
+      if (!modelPicker) return;
+      modelPicker.style.top = "";
+      modelPicker.style.left = "";
+      modelPicker.style.maxHeight = "";
+      modelPicker.style.maxWidth = "";
+      modelPicker.style.visibility = "";
+      if (modelPicker.dataset) delete modelPicker.dataset.pickerDir;
+    }
+
+    function pickerAnchorIndex() {
+      if (modelPickerKind !== "path") return 0;
+      const state = pathCompletion.snapshot();
+      return Number.isFinite(state.start) ? state.start : 0;
+    }
+
+    // This is the sole inline-style writer for the shared completion menu.
+    // The geometry helper works in viewport coordinates; the picker remains
+    // absolutely positioned inside form, so its result is translated once.
+    function positionModelPicker() {
+      if (!modelPicker) return;
+      if (heightMode === "normal") {
+        clearModelPickerGeometry();
+        return;
+      }
+      if (!modelPickerOpen || modelPicker.style.display !== "block" || typeof textarea.getBoundingClientRect !== "function" || typeof modelPicker.getBoundingClientRect !== "function") return;
+
+      const textareaRect = textarea.getBoundingClientRect();
+      const wrap = textarea.parentElement && typeof textarea.parentElement.getBoundingClientRect === "function" ? textarea.parentElement : textarea;
+      const wrapRect = wrap.getBoundingClientRect();
+      const topbar = typeof document !== "undefined" && typeof document.querySelector === "function" ? document.querySelector(".topbar") : null;
+      const topbarBottom = topbar && typeof topbar.getBoundingClientRect === "function" ? topbar.getBoundingClientRect().bottom : 0;
+      const gutter = Math.max(0, parseFloat(getComputedStyleFn(composerEl).getPropertyValue("--composer-picker-inset")) || 0);
+      const viewport = windowTarget && windowTarget.visualViewport
+        ? windowTarget.visualViewport
+        : typeof window !== "undefined" ? window.visualViewport : null;
+      const viewportHeight = viewport && Number.isFinite(viewport.height)
+        ? viewport.height
+        : typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 0;
+      const minTop = topbarBottom + gutter;
+      const maxBottom = Math.max(minTop, viewportHeight - gutter);
+      const wrapLeft = wrapRect.left + gutter;
+      const wrapRight = Math.max(wrapLeft, wrapRect.right - gutter);
+
+      // Clear only dimension constraints before measuring the newly-rendered
+      // content. A narrow input wrap then gets a second measurement after its
+      // width cap is applied, keeping the picker within that wrap.
+      modelPicker.style.top = "";
+      modelPicker.style.left = "";
+      modelPicker.style.maxHeight = "";
+      modelPicker.style.maxWidth = "";
+      let menuRect = modelPicker.getBoundingClientRect();
+      const wrapWidth = Math.max(0, wrapRight - wrapLeft);
+      if (menuRect.width > wrapWidth) {
+        modelPicker.style.maxWidth = `${wrapWidth}px`;
+        menuRect = modelPicker.getBoundingClientRect();
+      }
+      const caretRect = CodoxearPickerGeometry.measureTextareaCaret(textarea, pickerAnchorIndex());
+      if (!caretRect) return;
+      const geometry = CodoxearPickerGeometry.decidePickerGeometry({
+        caretTop: caretRect.top,
+        caretBottom: caretRect.bottom,
+        tokenLeft: caretRect.left,
+        menuNaturalHeight: menuRect.height,
+        menuWidth: menuRect.width,
+        wrapLeft,
+        wrapRight,
+        minTop,
+        maxBottom,
+        textareaTop: textareaRect.top,
+        textareaBottom: textareaRect.bottom,
+        gap: 6,
+        minHeight: 96,
+      });
+      const formRect = form.getBoundingClientRect();
+      modelPicker.style.top = `${geometry.top - formRect.top}px`;
+      modelPicker.style.left = `${geometry.left - formRect.left}px`;
+      modelPicker.style.maxHeight = `${geometry.maxHeight}px`;
+      modelPicker.style.visibility = geometry.visible ? "" : "hidden";
+      if (modelPicker.dataset) modelPicker.dataset.pickerDir = geometry.dir;
+    }
+
     function hideModelPicker() {
       pathCompletion.close();
       modelPickerOptions = [];
@@ -379,6 +462,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
         textarea.setAttribute("aria-expanded", "true");
       }
       syncModelPickerSelection();
+      positionModelPicker();
     }
     async function applyCodexSetting(kind, choice, session) {
       const sessionId = sessionState.get("selected");
@@ -459,6 +543,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       textarea.setAttribute("aria-controls", modelPicker.id || "modelPicker");
       textarea.setAttribute("aria-expanded", "true");
       syncModelPickerSelection();
+      positionModelPicker();
     }
 
     function selectPickerOption(option) {
@@ -560,6 +645,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
         textarea.setAttribute("aria-expanded", "true");
       }
       syncModelPickerSelection();
+      positionModelPicker();
     }
 
     function syncModelPicker() {
@@ -688,6 +774,7 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
         }
       }
       autoGrow();
+      positionModelPicker();
     }
 
     function loadHeightMode(sessionId) {
@@ -850,6 +937,12 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       syncModelPicker();
     });
     listen(textarea, "click", syncModelPicker);
+    listen(textarea, "select", () => {
+      if (modelPickerOpen) positionModelPicker();
+    });
+    listen(textarea, "scroll", () => {
+      if (modelPickerOpen) positionModelPicker();
+    });
     listen(textarea, "keyup", (event) => {
       // Acceptance and dismissal must survive their corresponding keyup.
       if (!event.isComposing && !["Enter", "Tab", "Escape"].includes(event.key)) syncModelPicker();
@@ -885,7 +978,11 @@ import * as CodoxearFileHelpers from "./app_file_helpers.js";
       event.preventDefault();
       form.requestSubmit();
     });
-    if (windowTarget) listen(windowTarget, "resize", onAutoGrow);
+    if (windowTarget) {
+      listen(windowTarget, "resize", () => { onAutoGrow(); positionModelPicker(); });
+      const visualViewport = windowTarget.visualViewport;
+      if (visualViewport && typeof visualViewport.addEventListener === "function") listen(visualViewport, "resize", positionModelPicker);
+    }
     bindExpandButton();
 
     form.onsubmit = async (event) => {

@@ -2165,6 +2165,12 @@ select {
          its max-height keeps topbar and composer chrome inside the viewport.
          Full is pure in-flow flex: the composer takes the whole .main column
          and the transcript collapses. */
+      .composer[data-height="tall"] .modelPicker,
+      .composer[data-height="full"] .modelPicker {
+        bottom: auto;
+        left: auto;
+        right: auto;
+      }
       .composer[data-height="tall"] textarea {
         height: var(--composer-tall-h, calc(var(--appH, 100dvh) * 0.55));
         max-height: calc(var(--appH, 100dvh) - 140px);

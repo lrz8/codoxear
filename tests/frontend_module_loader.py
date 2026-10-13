@@ -68,6 +68,7 @@ MODULE_NAMESPACES = {
     "app_new_session.js": ["CodoxearNewSession"],
     "app_notifications.js": ["CodoxearNotifications"],
     "app_path_completion.js": ["CodoxearPathCompletion"],
+    "app_picker_geometry.js": ["CodoxearPickerGeometry"],
     "app_polling.js": ["CodoxearPolling"],
     "app_queue.js": ["CodoxearQueue"],
     "app_send_lifecycle.js": ["CodoxearSendLifecycle"],
@@ -168,6 +169,7 @@ def module_path(module_name: str) -> Path:
         ("app_network.js", "CodoxearNetwork"),
         ("app_sw.js", "CodoxearSW"),
         ("app_path_completion.js", "CodoxearPathCompletion"),
+        ("app_picker_geometry.js", "CodoxearPickerGeometry"),
         ("app_file_helpers.js", "CodoxearFileHelpers"),
         ("app_snooze.js", "CodoxearSnooze"),
     ):
