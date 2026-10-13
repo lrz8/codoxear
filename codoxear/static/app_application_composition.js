@@ -75,7 +75,7 @@ import * as CodoxearWiring from "./app_wiring.js";
       window, document, navigator, HTMLElement, EventSource, AbortController, getComputedStyle,
       requestAnimationFrame, setTimeout, clearTimeout, $, UI_VERSION, ATTACH_UPLOAD_MAX_BYTES,
       isTextEntryElement, updateAppHeightVar,
-      codoxearViewport, codoxearDisplay, codoxearVoice, el, codoxearShell, codoxearSessions, codoxearComposer, codoxearAttachments, codoxearTopbar,
+      codoxearViewport, codoxearDisplay, codoxearVoice, el, codoxearShell, codoxearSessions, codoxearComposer, codoxearComposerHistory, codoxearAttachments, codoxearTopbar,
       codoxearSettings, themeController,
       codoxearMessageFlow, codoxearInterrupt, codoxearDialogMenus,
       codoxearDraftSync,
@@ -185,6 +185,7 @@ import * as CodoxearWiring from "./app_wiring.js";
         const sessionCatalog = CodoxearSessionCatalog.createSessionCatalog({ consoleError: (...args) => console.error(...args) });
         let attachmentsController = null;
         let composerController = null;
+        let composerHistoryController = null;
         let draftSyncController = null;
         let messageFlowController = null;
         let sessionLifecycleController = null;
@@ -270,6 +271,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           fileUnsavedController.hideFileUnsavedDialog("cancel");
           closeSendChoiceDialog();
           if (composerController) composerController.dispose();
+          if (composerHistoryController) composerHistoryController.dispose();
           if (draftSyncController) draftSyncController.dispose();
           sidebarController.dispose();
           while (appEventCleanups.length) {
@@ -1174,6 +1176,11 @@ import * as CodoxearWiring from "./app_wiring.js";
           clearTimeout,
           consoleError: (...args) => console.error(...args),
         }));
+        composerHistoryController = codoxearComposerHistory.createComposerHistoryController(wiring.createComposerHistoryOptions({
+          textarea,
+          sessionState,
+          api,
+        }));
         composerController = codoxearComposer.createComposerController(wiring.createComposerOptions({
           form,
           textarea,
@@ -1223,6 +1230,7 @@ import * as CodoxearWiring from "./app_wiring.js";
           now: () => Date.now(),
           consoleError: (...args) => console.error(...args),
           windowTarget: window,
+          historyController: composerHistoryController,
         }));
 
         setActiveAppCleanup(cleanupApp);

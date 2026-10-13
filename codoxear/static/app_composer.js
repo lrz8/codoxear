@@ -68,6 +68,9 @@ import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
     // Draft-sync notification seam: invoked from this module's own input
     // listener so no second listener attaches to the composer's textarea.
     const onDraftEdited = typeof options.onDraftEdited === "function" ? options.onDraftEdited : () => {};
+    const historyController = options.historyController && typeof options.historyController.handleKeydown === "function" && typeof options.historyController.reset === "function"
+      ? options.historyController
+      : null;
 
     const cleanups = [];
     const listen = (target, type, handler, eventOptions) => {
@@ -948,18 +951,6 @@ import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
       if (!event.isComposing && !["Enter", "Tab", "Escape"].includes(event.key)) syncModelPicker();
     });
     listen(textarea, "keydown", (event) => {
-      if (event.key === "Escape") {
-        if (isModalOpen()) return;
-        if (modelPickerOpen) {
-          event.preventDefault();
-          hideModelPicker();
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        blurComposer();
-        return;
-      }
       if (modelPickerOpen) {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
@@ -973,6 +964,19 @@ import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
           selectPickerOption(modelPickerOptions[modelPickerFocus >= 0 ? modelPickerFocus : 0]);
           return;
         }
+      }
+      if (!modelPickerOpen && historyController && historyController.handleKeydown(event)) return;
+      if (event.key === "Escape") {
+        if (isModalOpen()) return;
+        if (modelPickerOpen) {
+          event.preventDefault();
+          hideModelPicker();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        blurComposer();
+        return;
       }
       if (event.key !== "Enter" || event.isComposing || !(event.ctrlKey || event.metaKey)) return;
       event.preventDefault();
@@ -1003,6 +1007,7 @@ import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
         return;
       }
       const ok = await sendText(raw);
+      if (ok && historyController) historyController.reset();
       if (ok) blurComposer();
       if (ok && textarea.value === raw) {
         clearComposer({ blur: false });
@@ -1016,6 +1021,7 @@ import * as CodoxearPickerGeometry from "./app_picker_geometry.js";
       hideSendChoice({ restoreFocus: true });
       if (!raw || !sessionId) return;
       const ok = await sendText(raw, { sid: sessionId });
+      if (ok && historyController) historyController.reset();
       if (ok) blurComposer();
       if (ok && sessionId === sessionState.get("selected") && textarea.value === raw) {
         clearComposer({ blur: false });

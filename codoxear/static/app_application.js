@@ -2,6 +2,7 @@ import * as CodoxearApi from "./app_api.js";
 import * as CodoxearApplicationComposition from "./app_application_composition.js";
 import * as CodoxearAttachments from "./app_attachments.js";
 import * as CodoxearComposer from "./app_composer.js";
+import * as CodoxearComposerHistory from "./app_composer_history.js";
 import * as CodoxearConversationCopy from "./app_conversation_copy.js";
 import * as CodoxearDialogMenus from "./app_dialog_menu.js";
 import * as CodoxearDisplay from "./app_display.js";
@@ -599,7 +600,7 @@ const global = window;
         requestAnimationFrame, setTimeout, clearTimeout, $, UI_VERSION, ATTACH_UPLOAD_MAX_BYTES,
         isTextEntryElement, updateAppHeightVar,
         codoxearViewport: CodoxearViewport, codoxearDisplay: CodoxearDisplay, codoxearVoice: CodoxearVoice, el, codoxearShell: CodoxearShell,
-        codoxearSettings: CodoxearSettings, themeController, codoxearSessions: CodoxearSessions, codoxearComposer: CodoxearComposer, codoxearAttachments: CodoxearAttachments, codoxearTopbar: CodoxearTopbar,
+        codoxearSettings: CodoxearSettings, themeController, codoxearSessions: CodoxearSessions, codoxearComposer: CodoxearComposer, codoxearComposerHistory: CodoxearComposerHistory, codoxearAttachments: CodoxearAttachments, codoxearTopbar: CodoxearTopbar,
         codoxearDraftSync: CodoxearDraftSync,
         codoxearMessageFlow: CodoxearMessageFlow, codoxearInterrupt: CodoxearInterrupt, codoxearDialogMenus: CodoxearDialogMenus,
         codoxearFileEditMode: CodoxearFileEditMode, codoxearPendingUser: CodoxearPendingUser, codoxearNavigationPulse: CodoxearNavigationPulse,

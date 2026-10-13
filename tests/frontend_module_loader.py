@@ -27,6 +27,7 @@ MODULE_NAMESPACES = {
     "app_chat_search.js": ["CodoxearChatSearch"],
     "app_code_copy.js": ["CodoxearCodeCopy"],
     "app_composer.js": ["CodoxearComposer"],
+    "app_composer_history.js": ["CodoxearComposerHistory"],
     "app_conversation_copy.js": ["CodoxearConversationCopy"],
     "app_diagnostics.js": ["CodoxearDiagnostics"],
     "app_dialog_menu.js": ["CodoxearDialogMenu", "CodoxearDialogMenus"],
