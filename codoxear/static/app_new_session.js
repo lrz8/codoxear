@@ -1,5 +1,6 @@
 import * as CodoxearDisplay from "./app_display.js";
 import * as CodoxearLaunch from "./app_launch.js";
+import * as CodoxearUrls from "./app_application.js";
 
 
 
@@ -249,6 +250,7 @@ function requireFunction(value, name) {
       const cleanModel = String(model || "").trim() || "default";
       const cleanProvider = providerAbsent ? "" : String(providerChoice || "").trim();
       const displayText = newSessionProviderModelDisplay(cleanModel, cleanProvider);
+      const defaults = CodoxearLaunch.defaultsForAgentBackend(backend(), defaultsSource());
       return {
         model: cleanModel,
         providerChoice: cleanProvider,
@@ -257,6 +259,7 @@ function requireFunction(value, name) {
         configured: !!configured,
         displayText,
         searchText: cleanProvider ? `${cleanProvider}/${cleanModel} ${cleanModel}` : cleanModel,
+        authenticationRequired: backend() === "pi" && defaults.provider_auth?.[cleanProvider] === false,
       };
     }
 
@@ -330,11 +333,11 @@ function requireFunction(value, name) {
       });
       const query = display ? `${display.providerChoice}/${display.model}`.toLowerCase() : rawQuery.toLowerCase();
       const options = sessionModelOptions();
-      if (!query) return options.slice(0, 12);
+      if (!query || options.some(item => item.displayText === rawQuery)) return options;
       const exact = options.filter((item) => String(item.model || "").toLowerCase() === query || String(item.searchText || "").toLowerCase() === query);
       const prefix = options.filter((item) => !exact.includes(item) && String(item.searchText || item.model || "").toLowerCase().startsWith(query));
       const contains = options.filter((item) => !exact.includes(item) && !prefix.includes(item) && CodoxearLaunch.modelOptionMatches(item, query));
-      return exact.concat(prefix, contains).slice(0, 12);
+      return exact.concat(prefix, contains);
     }
 
     function setNewSessionReasoningEffort(value) {
@@ -631,13 +634,25 @@ function requireFunction(value, name) {
         return;
       }
       for (const item of resumeCandidates) {
+        if (backend() === "pi" && item.history_id) {
+          const view = el("a", {
+            class: "fileMenuItem", text: `View history · ${newSessionResumeLabel(item)}`,
+            href: CodoxearUrls.resolveAppUrl(`/api/pi_history/${encodeURIComponent(item.history_id)}/view`),
+            target: "_blank", rel: "noopener",
+            title: `${item.source_host || "This machine"} · ${item.cwd || ""}`,
+          });
+          resumeMenu.appendChild(view);
+          if (!item.resumable) continue;
+        }
         const btn = el("button", {
           class: "fileMenuItem" + (resumeSelection && resumeSelection.session_id === item.session_id ? " active" : ""),
           type: "button",
           title: newSessionResumeLabel(item),
         });
         btn.appendChild(el("span", { class: "fileMenuPath", text: newSessionResumeLabel(item) }));
+        if (backend() === "pi" && item.cwd) btn.appendChild(el("span", { class: "fileMenuHint", text: item.cwd }));
         btn.onclick = () => {
+          if (backend() === "pi" && item.cwd && item.cwd !== cwdInput.value) applyNewSessionCwdSuggestion(item.cwd);
           setNewSessionResumeSelection(item);
           closeResumeMenu();
           applyDialogMenus();
@@ -650,7 +665,7 @@ function requireFunction(value, name) {
       const raw = String(cwd || "").trim();
       const seq = ++resumeLoadSeq;
       const backendValue = backend();
-      if (!raw) {
+      if (!raw && backendValue !== "pi") {
         setNewSessionCwdError("");
         resumeCandidates = [];
         setNewSessionResumeSelection(null);
@@ -901,7 +916,7 @@ function requireFunction(value, name) {
         const active = modelMenuFocus === index || (modelMenuFocus < 0 && (raw === title || raw === item.model));
         const btn = el("button", { id: `newSessionModelOption-${index}`, class: "fileMenuItem" + (active ? " active" : ""), type: "button", role: "option", "aria-selected": active ? "true" : "false", "aria-label": title, title });
         btn.appendChild(el("span", { class: "fileMenuPath", text: item.model }));
-        if (item.providerChoice) btn.appendChild(el("span", { class: "fileMenuHint", text: item.providerChoice }));
+        if (item.providerChoice) btn.appendChild(el("span", { class: "fileMenuHint", text: item.providerChoice + (item.authenticationRequired ? " · Requires Pi login / API key" : "") }));
         btn.onmousedown = (event) => event.preventDefault();
         btn.onclick = () => controller.selectNewSessionModel(item);
         modelMenu.appendChild(btn);

@@ -4,10 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 import urllib.parse
+import html
 
 from . import rollout_log as _rollout_log
 from .message_routes import _read_chat_export_events
 from .cwd_suggest import cwd_suggestions
+from .agent_backend import get_agent_backend
+from .pi_history import list_pi_history, pi_history_log
 
 
 JsonResponse = Callable[[Any, int, dict[str, Any]], None]
@@ -53,6 +56,9 @@ def handle_session_get_route(
         return True
     if path == "/api/session_resume_candidates":
         _handle_session_resume_candidates(handler, query=query, manager=manager, deps=deps)
+        return True
+    if path.startswith("/api/pi_history/") and path.endswith("/view"):
+        _handle_pi_history_view(handler, history_id=path.split("/")[-2], deps=deps)
         return True
     if path == "/api/cwd-suggest":
         _handle_cwd_suggest(handler, query=query, deps=deps)
@@ -198,13 +204,17 @@ def _handle_session_resume_candidates(handler: Any, *, query: str, manager: Any,
     except ValueError as e:
         deps.json_response(handler, 400, {"error": str(e)})
         return
+    all_pi_history = agent_backend == "pi" and qs.get("scope", [""])[0] == "all"
     try:
-        cwd_path = deps.resolve_dir_target(str(cwd_raw), field_name="cwd")
+        cwd_path = deps.resolve_dir_target(str(cwd_raw) or (str(Path.home()) if all_pi_history else ""), field_name="cwd")
     except ValueError as e:
         deps.json_response(handler, 400, {"error": str(e), "field": "cwd"})
         return
     info = deps.describe_session_cwd(cwd_path)
-    rows = deps.list_resume_candidates_for_cwd(info["cwd"], agent_backend=agent_backend) if info["exists"] else []
+    if all_pi_history:
+        rows = list_pi_history(get_agent_backend("pi").sessions_dir())
+    else:
+        rows = deps.list_resume_candidates_for_cwd(info["cwd"], agent_backend=agent_backend) if info["exists"] else []
     for row in rows:
         sid = row.get("session_id")
         log_path_raw = row.get("log_path")
@@ -215,6 +225,41 @@ def _handle_session_resume_candidates(handler: Any, *, query: str, manager: Any,
         row["alias"] = alias
         row["first_user_message"] = preview
     deps.json_response(handler, 200, {"ok": True, **info, "sessions": rows})
+
+
+def _handle_pi_history_view(handler: Any, *, history_id: str, deps: SessionRouteDeps) -> None:
+    if not _authorized(handler, deps):
+        return
+    log_path = pi_history_log(get_agent_backend("pi").sessions_dir(), history_id)
+    if log_path is None:
+        deps.json_response(handler, 404, {"error": "history not found"})
+        return
+    try:
+        events = _read_chat_export_events(log_path, max_bytes=50 * 1024 * 1024)
+    except (OSError, ValueError) as error:
+        deps.json_response(handler, 400, {"error": str(error)})
+        return
+    sections = []
+    for event in events:
+        text = event.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+        role = html.escape(str(event.get("role") or event.get("type") or "Message"))
+        sections.append(f'<section><h2>{role}</h2><pre>{html.escape(text)}</pre></section>')
+    body = ('<!doctype html><html lang="en"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Pi conversation history</title><style>'
+            'body{font:16px/1.6 system-ui,sans-serif;max-width:70rem;margin:24px auto;padding:0 20px}'
+            'pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}'
+            'h2{font-size:1rem}section{border-top:1px solid;padding-top:12px}'
+            '</style><h1>Pi conversation history</h1>' + ''.join(sections) + '</html>').encode()
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def _handle_cwd_suggest(handler: Any, *, query: str, deps: SessionRouteDeps) -> None:

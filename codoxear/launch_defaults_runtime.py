@@ -20,7 +20,9 @@ def path_signature(path: Path) -> tuple[str, bool, int | None, int | None]:
 
 
 def launch_defaults_signature(paths: LaunchConfigPaths) -> LaunchDefaultsSignature:
-    return tuple(path_signature(path) for path in vars(paths).values() if isinstance(path, Path))
+    files = [path for path in vars(paths).values() if isinstance(path, Path)]
+    files.append(paths.pi_models_path.parent / "models-store.json")
+    return tuple(path_signature(path) for path in files)
 
 
 def read_new_session_defaults_cached(

@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 from .agent_backend import get_agent_backend
 from .agent_backend import normalize_agent_backend
 from .cc_log import CC_SUPPORTED_REASONING_EFFORTS
+from .pi_model_catalog import read_pi_model_catalog
 
 SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 SUPPORTED_PI_REASONING_EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -500,10 +501,30 @@ def read_pi_launch_defaults(paths: LaunchConfigPaths) -> dict[str, Any]:
                     if not isinstance(row, dict):
                         continue
                     model_id = clean_optional_text(row.get("id"))
-                    if model_id is None or model_id in model_choices:
+                    if model_id is None or model_id in provider_models[name]:
                         continue
-                    model_choices.append(model_id)
+                    if model_id not in model_choices:
+                        model_choices.append(model_id)
                     provider_models[name].append(model_id)
+
+    catalog = read_pi_model_catalog(paths.pi_models_path, paths.pi_auth_path)
+    for row in catalog.get("models", []):
+        if not isinstance(row, dict):
+            continue
+        name = clean_optional_text(row.get("provider"))
+        model_id = clean_optional_text(row.get("id"))
+        if name is None or model_id is None:
+            continue
+        if name not in provider_choices:
+            provider_choices.append(name)
+        models = provider_models.setdefault(name, [])
+        if model_id not in models:
+            models.append(model_id)
+        if model_id not in model_choices:
+            model_choices.append(model_id)
+        efforts = pi_reasoning_efforts_for_model_row(row)
+        if efforts is not None:
+            reasoning_efforts_by_model.setdefault(f"{name}/{model_id}", efforts)
 
     if paths.pi_auth_path.exists():
         data = json.loads(paths.pi_auth_path.read_text(encoding="utf-8"))
@@ -548,6 +569,7 @@ def read_pi_launch_defaults(paths: LaunchConfigPaths) -> dict[str, Any]:
         "model": configured_model,
         "models": model_choices,
         "provider_models": provider_models,
+        "provider_auth": catalog.get("provider_auth", {}),
         "reasoning_effort": configured_effort,
         "reasoning_efforts": configured_efforts,
         "reasoning_efforts_by_model": reasoning_efforts_by_model,

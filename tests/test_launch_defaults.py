@@ -31,6 +31,7 @@ import os
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -64,6 +65,34 @@ def _paths_for(root: Path) -> LaunchConfigPaths:
 
 
 class TestLaunchDefaults(unittest.TestCase):
+    def setUp(self) -> None:
+        catalog = patch("codoxear.launch_config.read_pi_model_catalog", return_value={})
+        catalog.start()
+        self.addCleanup(catalog.stop)
+
+    def test_pi_duplicate_model_ids_remain_selectable_for_each_provider(self) -> None:
+        with TemporaryDirectory() as td:
+            paths = _paths_for(Path(td))
+            paths.pi_models_path.write_text(json.dumps({"providers": {
+                "completions": {"models": [{"id": "shared"}, {"id": "shared"}]},
+                "responses": {"models": [{"id": "shared"}]},
+            }}))
+            defaults = read_pi_launch_defaults(paths)
+        self.assertEqual(defaults["models"], ["shared"])
+        self.assertEqual(defaults["provider_models"], {"completions": ["shared"], "responses": ["shared"]})
+
+    def test_pi_builtin_catalog_and_auth_metadata_are_advertised(self) -> None:
+        with TemporaryDirectory() as td:
+            paths = _paths_for(Path(td))
+            with patch("codoxear.launch_config.read_pi_model_catalog", return_value={
+                "models": [{"provider": "builtin", "id": "catalog-model", "reasoning": False}],
+                "provider_auth": {"builtin": False},
+            }):
+                defaults = read_pi_launch_defaults(paths)
+        self.assertEqual(defaults["provider_models"], {"builtin": ["catalog-model"]})
+        self.assertEqual(defaults["provider_auth"], {"builtin": False})
+        self.assertEqual(defaults["reasoning_efforts_by_model"]["builtin/catalog-model"], ["off"])
+
     def test_read_new_session_defaults_cache_uses_config_signatures(self) -> None:
         # The cached facade is exercised directly with injected paths_provider,
         # defaults_reader, cache lock and cache accessors. The test owns the
