@@ -5,12 +5,30 @@ from pathlib import Path
 from typing import Any, Callable
 import urllib.parse
 import html
+import socket
+import threading
+import urllib.error
 
 from . import rollout_log as _rollout_log
 from .message_routes import _read_chat_export_events
 from .cwd_suggest import cwd_suggestions
 from .agent_backend import get_agent_backend
 from .pi_history import list_pi_history, pi_history_log
+from .federation import peers, merge_history, rewrite_payload
+from .pi_presence import unmanaged_presence, resume_blocked_reason
+
+_launch_lock = threading.RLock()
+
+
+def _live_history_targets(sessions: list[dict[str, Any]], backend: str = "pi") -> dict[str, dict[str, Any]]:
+    targets = {}
+    for row in sessions:
+        if row.get("agent_backend") != backend or not row.get("broker_pid"):
+            continue
+        for key in ("session_id", "thread_id", "resume_session_id"):
+            if isinstance(row.get(key), str) and row[key]:
+                targets[row[key]] = row
+    return targets
 
 
 JsonResponse = Callable[[Any, int, dict[str, Any]], None]
@@ -51,6 +69,20 @@ def handle_session_get_route(
     deps: SessionRouteDeps,
     match_session_route: RouteMatcher,
 ) -> bool:
+    if path == "/api/peer-snapshot":
+        if _authorized(handler, deps):
+            sessions = manager.list_sessions()
+            live = _live_history_targets(sessions)
+            presence = unmanaged_presence(sessions)
+            history = [row for row in list_pi_history(get_agent_backend("pi").sessions_dir()) if not row["source_host"]]
+            for row in history:
+                row["alias"] = manager.alias_get(row["session_id"])
+                row["active_session_id"] = live[row["session_id"]]["session_id"] if row["session_id"] in live else None
+                reason = resume_blocked_reason(row["session_id"], row["cwd"], presence)
+                if reason and not row["active_session_id"]:
+                    row.update(resumable=False, resume_unavailable_reason=reason)
+            deps.json_response(handler, 200, {"version": 1, "hostname": socket.gethostname(), "sessions": sessions, "history": history})
+        return True
     if path == "/api/sessions":
         _handle_sessions_list(handler, manager=manager, deps=deps)
         return True
@@ -178,6 +210,10 @@ def _handle_sessions_list(handler: Any, *, manager: Any, deps: SessionRouteDeps)
         return
     t0 = deps.perf_counter()
     sessions = manager.list_sessions()
+    devices = []
+    if handler.headers.get("X-Codoxear-Local-Only") != "1":
+        remote_sessions, _, devices = peers().snapshot()
+        sessions = sessions + remote_sessions
     recent_cwds = manager.recent_cwds()
     new_session_defaults = deps.read_new_session_defaults()
     dt_ms = (deps.perf_counter() - t0) * 1000.0
@@ -186,6 +222,7 @@ def _handle_sessions_list(handler: Any, *, manager: Any, deps: SessionRouteDeps)
         handler,
         {
             "sessions": sessions,
+            "devices": devices,
             "recent_cwds": recent_cwds,
             "new_session_defaults": new_session_defaults,
             "tmux_available": deps.tmux_available(),
@@ -215,16 +252,27 @@ def _handle_session_resume_candidates(handler: Any, *, query: str, manager: Any,
         rows = list_pi_history(get_agent_backend("pi").sessions_dir())
     else:
         rows = deps.list_resume_candidates_for_cwd(info["cwd"], agent_backend=agent_backend) if info["exists"] else []
+    live = _live_history_targets(manager.list_sessions(), agent_backend)
+    presence = unmanaged_presence(list(live.values())) if all_pi_history else (set(), set())
     for row in rows:
         sid = row.get("session_id")
         log_path_raw = row.get("log_path")
         alias = manager.alias_get(sid) if isinstance(sid, str) and sid else ""
-        preview = ""
-        if isinstance(log_path_raw, str) and log_path_raw:
+        preview = row.get("first_user_message", "")
+        if not all_pi_history and isinstance(log_path_raw, str) and log_path_raw:
             preview = deps.first_user_message_preview_from_log(Path(log_path_raw))
         row["alias"] = alias
         row["first_user_message"] = preview
-    deps.json_response(handler, 200, {"ok": True, **info, "sessions": rows})
+        row["active_session_id"] = live[sid]["session_id"] if sid in live and row.get("resumable", True) else None
+        if all_pi_history and not row.get("source_host") and not row["active_session_id"]:
+            reason = resume_blocked_reason(sid, row["cwd"], presence)
+            if reason:
+                row.update(resumable=False, resume_unavailable_reason=reason)
+    devices = []
+    if all_pi_history and handler.headers.get("X-Codoxear-Local-Only") != "1":
+        _, remote_history, devices = peers().snapshot()
+        rows = merge_history(rows, remote_history)
+    deps.json_response(handler, 200, {"ok": True, **info, "sessions": rows, "devices": devices})
 
 
 def _handle_pi_history_view(handler: Any, *, history_id: str, deps: SessionRouteDeps) -> None:
@@ -303,6 +351,32 @@ def _handle_session_create(handler: Any, *, manager: Any, deps: SessionRouteDeps
     if not _authorized(handler, deps):
         return
     obj = deps.read_json_body(handler)
+    resume_id = obj.get("resume_session_id")
+    if isinstance(resume_id, str) and "~" in resume_id:
+        target = peers().resolve(resume_id)
+        if target is None:
+            deps.json_response(handler, 404, {"error": "Unknown device"})
+            return
+        peer, source_id = target
+        body = {**obj, "resume_session_id": source_id}
+        try:
+            import json
+            with peer.open("/api/sessions", method="POST", data=json.dumps(body).encode(), timeout=60) as response:
+                result = json.loads(response.read(1024 * 1024))
+            result = rewrite_payload(result, peer.id, source_id)
+            result["session_host"] = peer.id
+            peers().last_attempt[peer.id] = -100
+            deps.json_response(handler, 200, result)
+        except urllib.error.HTTPError as error:
+            with error:
+                try:
+                    payload = json.loads(error.read(64 * 1024))
+                except ValueError:
+                    payload = {"error": "Remote session could not be resumed"}
+            deps.json_response(handler, error.code, payload)
+        except (OSError, ValueError):
+            deps.json_response(handler, 503, {"error": f"{peer.name} is unavailable; its conversation was not migrated."})
+        return
     try:
         launch_req = deps.parse_new_session_launch_request(obj)
     except deps.launch_request_validation_error as e:
@@ -315,36 +389,53 @@ def _handle_session_create(handler: Any, *, manager: Any, deps: SessionRouteDeps
     except ValueError as e:
         deps.json_response(handler, 400, {"error": str(e)})
         return
-    try:
-        res = manager.spawn_web_session(
-            cwd=launch_req.cwd,
-            args=launch_req.args,
-            agent_backend=launch_req.agent_backend,
-            resume_session_id=launch_req.resume_session_id,
-            worktree_branch=launch_req.worktree_branch,
-            model_provider=launch_req.model_provider,
-            preferred_auth_method=launch_req.preferred_auth_method,
-            model=launch_req.model,
-            reasoning_effort=launch_req.reasoning_effort,
-            service_tier=launch_req.service_tier,
-            create_in_tmux=launch_req.create_in_tmux,
-        )
-    except ValueError as e:
-        payload = {"error": str(e)}
-        if str(e).startswith("cwd "):
-            payload["field"] = "cwd"
-        deps.json_response(handler, 400, payload)
-        return
-    except deps.session_launch_error as e:
-        record = getattr(e, "record")
-        deps.json_response(
-            handler,
-            500,
-            {
-                "error": str(e),
-                "launch_attempt": record,
-                "launch_id": record.get("launch_id"),
-            },
-        )
-        return
-    deps.json_response(handler, 200, {"ok": True, **res})
+    with _launch_lock:
+        if launch_req.resume_session_id:
+            existing = next((row for row in manager.list_sessions()
+                             if launch_req.resume_session_id in (row.get("session_id"), row.get("resume_session_id"), row.get("thread_id"))
+                             and row.get("agent_backend") == launch_req.agent_backend
+                             and row.get("broker_pid")), None)
+            if existing:
+                deps.json_response(handler, 200, {
+                    "ok": True, "existing_session_id": existing["session_id"],
+                    "broker_pid": existing["broker_pid"],
+                })
+                return
+        if launch_req.resume_session_id and launch_req.agent_backend == "pi":
+            reason = resume_blocked_reason(launch_req.resume_session_id, launch_req.cwd, unmanaged_presence(manager.list_sessions()))
+            if reason:
+                deps.json_response(handler, 409, {"error": reason})
+                return
+        try:
+            res = manager.spawn_web_session(
+                cwd=launch_req.cwd,
+                args=launch_req.args,
+                agent_backend=launch_req.agent_backend,
+                resume_session_id=launch_req.resume_session_id,
+                worktree_branch=launch_req.worktree_branch,
+                model_provider=launch_req.model_provider,
+                preferred_auth_method=launch_req.preferred_auth_method,
+                model=launch_req.model,
+                reasoning_effort=launch_req.reasoning_effort,
+                service_tier=launch_req.service_tier,
+                create_in_tmux=launch_req.create_in_tmux,
+            )
+        except ValueError as e:
+            payload = {"error": str(e)}
+            if str(e).startswith("cwd "):
+                payload["field"] = "cwd"
+            deps.json_response(handler, 400, payload)
+            return
+        except deps.session_launch_error as e:
+            record = getattr(e, "record")
+            deps.json_response(
+                handler,
+                500,
+                {
+                    "error": str(e),
+                    "launch_attempt": record,
+                    "launch_id": record.get("launch_id"),
+                },
+            )
+            return
+        deps.json_response(handler, 200, {"ok": True, **res})

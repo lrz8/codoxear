@@ -12,9 +12,15 @@
 set -euo pipefail
 
 readonly SERVICE_NAME="codoxear-server.service"
+readonly PLATFORM="$(uname -s)"
+readonly PYTHON_BIN="${CODOXEAR_PYTHON:-python3}"
 readonly SOURCE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly DEPLOY_DIR="${CODOXEAR_DEPLOY_DIR:-$HOME/.local/share/codoxear/deploy}"
-readonly UNIT_PATH="${CODOXEAR_SERVICE_UNIT:-$HOME/.config/systemd/user/$SERVICE_NAME}"
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  readonly UNIT_PATH="${CODOXEAR_SERVICE_UNIT:-$HOME/Library/LaunchAgents/com.lrz8.codoxear-worker.plist}"
+else
+  readonly UNIT_PATH="${CODOXEAR_SERVICE_UNIT:-$HOME/.config/systemd/user/$SERVICE_NAME}"
+fi
 
 usage() {
   cat <<'EOF'
@@ -22,7 +28,9 @@ Usage: scripts/deploy.sh <commit-ish>
 
 Creates or updates ~/.local/share/codoxear/deploy as a detached git worktree at
 <commit-ish>, installs that snapshot with pipx, points the user service at the
-snapshot, restarts only codoxear-server.service, and verifies its HTTP boundary.
+snapshot, restarts only its systemd service (or macOS LaunchAgent), and verifies
+its HTTP boundary. CODOXEAR_HEALTH_URL overrides the local health-check URL;
+CODOXEAR_PYTHON selects Python 3.10+ for deployment checks.
 EOF
 }
 
@@ -108,7 +116,7 @@ update_snapshot || {
 
 # Rebuild the browser artifact from the reviewed ESM source in the detached
 # snapshot; deployment never serves files from the editable checkout.
-npx esbuild "$DEPLOY_DIR/codoxear/static/app.js" --bundle --minify \
+npx --yes esbuild@0.28.2 "$DEPLOY_DIR/codoxear/static/app.js" --bundle --minify \
   --outfile="$DEPLOY_DIR/codoxear/static/dist/app.bundle.js" --format=esm
 
 # Parse every exact immutable static asset before changing the installed package
@@ -119,11 +127,11 @@ npx esbuild "$DEPLOY_DIR/codoxear/static/app.js" --bundle --minify \
 while IFS= read -r -d '' javascript_path; do
   node --check "$javascript_path"
 done < <(find "$DEPLOY_DIR/codoxear/static" -type f -name '*.js' -print0 | sort -z)
-if ! python3 "$DEPLOY_DIR/scripts/check_js_refs.py" "$DEPLOY_DIR/codoxear/static"; then
+if ! "$PYTHON_BIN" "$DEPLOY_DIR/scripts/check_js_refs.py" "$DEPLOY_DIR/codoxear/static"; then
   echo "app.js reference check failed in deploy snapshot" >&2
   exit 1
 fi
-if ! python3 "$DEPLOY_DIR/scripts/check_wiring.py" "$DEPLOY_DIR/codoxear/static"; then
+if ! "$PYTHON_BIN" "$DEPLOY_DIR/scripts/check_wiring.py" "$DEPLOY_DIR/codoxear/static"; then
   echo "frontend wiring guard failed in deploy snapshot" >&2
   exit 1
 fi
@@ -155,9 +163,26 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
   exit 1
 fi
 
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  "$PYTHON_BIN" - "$UNIT_PATH" "$DEPLOY_DIR" "$VENV_PYTHON" <<'PYMAC'
+import os
+import plistlib
+import sys
+from pathlib import Path
+unit = Path(sys.argv[1])
+config = plistlib.loads(unit.read_bytes())
+config["WorkingDirectory"] = sys.argv[2]
+config["ProgramArguments"] = [sys.argv[3], "-u", "-m", "codoxear.server"]
+temporary = unit.with_suffix(".tmp")
+with temporary.open("wb") as stream:
+    os.chmod(temporary, 0o600)
+    plistlib.dump(config, stream)
+temporary.replace(unit)
+PYMAC
+else
 # Preserve every unrelated unit setting (notably Environment/EnvironmentFile)
 # while making its import root and invocation use the immutable snapshot.
-python3 - "$UNIT_PATH" "$DEPLOY_DIR" "$VENV_PYTHON" <<'PY'
+"$PYTHON_BIN" - "$UNIT_PATH" "$DEPLOY_DIR" "$VENV_PYTHON" <<'PY'
 from __future__ import annotations
 
 import os
@@ -186,21 +211,30 @@ finally:
     temporary_path.unlink(missing_ok=True)
 PY
 
-systemctl --user daemon-reload
-systemctl --user restart "$SERVICE_NAME"
-systemctl --user is-active --quiet "$SERVICE_NAME"
+fi
 
-SERVICE_ENVIRONMENT="$(systemctl --user show "$SERVICE_NAME" -p Environment --value)"
-SERVICE_PORT="$(sed -n 's/.*\bCODEX_WEB_PORT=\([^ ]*\).*/\1/p' <<<"$SERVICE_ENVIRONMENT")"
-SERVICE_PORT="${SERVICE_PORT:-8743}"
-BASE_URL="http://127.0.0.1:$SERVICE_PORT"
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  SERVICE_LABEL="$("$PYTHON_BIN" -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["Label"])' "$UNIT_PATH")"
+  SERVICE_DOMAIN="gui/$(id -u)"
+  launchctl bootout "$SERVICE_DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "$SERVICE_DOMAIN" "$UNIT_PATH"
+  BASE_URL="${CODOXEAR_HEALTH_URL:-http://127.0.0.1:8744}"
+else
+  systemctl --user daemon-reload
+  systemctl --user restart "$SERVICE_NAME"
+  systemctl --user is-active --quiet "$SERVICE_NAME"
+  SERVICE_ENVIRONMENT="$(systemctl --user show "$SERVICE_NAME" -p Environment --value)"
+  SERVICE_PORT="$(sed -n 's/.*\bCODEX_WEB_PORT=\([^ ]*\).*/\1/p' <<<"$SERVICE_ENVIRONMENT")"
+  SERVICE_PORT="${SERVICE_PORT:-8743}"
+  BASE_URL="${CODOXEAR_HEALTH_URL:-http://127.0.0.1:$SERVICE_PORT}"
+fi
 
 wait_for_status() {
   local expected_status="$1"
   local path="$2"
   local status=""
   for _ in {1..30}; do
-    status="$(curl --connect-timeout 2 --max-time 5 --silent --output /dev/null --write-out '%{http_code}' "$BASE_URL$path" || true)"
+    status="$(curl --noproxy '*' --connect-timeout 2 --max-time 5 --silent --output /dev/null --write-out '%{http_code}' "$BASE_URL$path" || true)"
     if [[ "$status" == "$expected_status" ]]; then
       return 0
     fi
@@ -217,11 +251,11 @@ wait_for_status 401 "/api/sessions"
 # renderApp's closure has every declaration it uses. Authenticate through the
 # deployed UI, then use the reusable command to require a visible clean app on
 # both its first load and a reload.
-if command -v agent-browser >/dev/null && [[ "${CODOXEAR_SKIP_BOOT_CHECK:-0}" != "1" ]]; then
+if [[ "$PLATFORM" != "Darwin" ]] && command -v agent-browser >/dev/null && [[ "${CODOXEAR_SKIP_BOOT_CHECK:-0}" != "1" ]]; then
   BOOT_CHECK_PASSWORD="${CODOXEAR_BOOT_CHECK_PASSWORD:-${CODEX_WEB_PASSWORD:-}}"
   if [[ -z "$BOOT_CHECK_PASSWORD" ]]; then
     SERVICE_ENVIRONMENT_FILES="$(systemctl --user show "$SERVICE_NAME" -p EnvironmentFiles --value)"
-    BOOT_CHECK_PASSWORD="$(python3 - "$SERVICE_ENVIRONMENT" "$SERVICE_ENVIRONMENT_FILES" <<'PY'
+    BOOT_CHECK_PASSWORD="$("$PYTHON_BIN" - "$SERVICE_ENVIRONMENT" "$SERVICE_ENVIRONMENT_FILES" <<'PY'
 import shlex
 import sys
 from pathlib import Path

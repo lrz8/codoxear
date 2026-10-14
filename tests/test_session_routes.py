@@ -13,6 +13,7 @@ from codoxear.session_routes import handle_session_post_route
 class _FakeHandler:
     def __init__(self) -> None:
         self.unauthorized = False
+        self.headers = {}
 
     def _unauthorized(self) -> None:
         self.unauthorized = True
@@ -133,6 +134,7 @@ def test_handle_session_get_route_lists_sessions_with_etag_and_metric() -> None:
     assert etag_payloads == [
         {
             "sessions": [{"id": "s1"}],
+            "devices": [],
             "recent_cwds": ["/repo"],
             "new_session_defaults": {"backend": "codex"},
             "tmux_available": True,
@@ -141,6 +143,22 @@ def test_handle_session_get_route_lists_sessions_with_etag_and_metric() -> None:
     ]
     assert metrics[0][0] == "api_sessions_ms"
     assert abs(metrics[0][1] - 123.0) < 1e-9
+
+
+def test_resume_opens_existing_broker_using_native_thread_id():
+    deps, responses, _, _ = _deps()
+    original_parse = deps.parse_new_session_launch_request
+    def parse(obj):
+        result = original_parse(obj)
+        result.agent_backend = "pi"
+        result.resume_session_id = "native-thread"
+        return result
+    object.__setattr__(deps, "parse_new_session_launch_request", parse)
+    manager = _FakeManager()
+    manager.list_sessions = lambda: [{"session_id": "broker-7", "thread_id": "native-thread", "agent_backend": "pi", "broker_pid": 7}]
+    assert handle_session_post_route(_FakeHandler(), path="/api/sessions", manager=manager, deps=deps)
+    assert responses == [(200, {"ok": True, "existing_session_id": "broker-7", "broker_pid": 7})]
+    assert manager.spawn_args is None
 
 
 def test_handle_session_get_route_resume_candidates_adds_alias_and_preview() -> None:
@@ -167,8 +185,10 @@ def test_handle_session_get_route_resume_candidates_adds_alias_and_preview() -> 
                         "log_path": "/tmp/log.jsonl",
                         "alias": "alias-s1",
                         "first_user_message": "first:log.jsonl",
+                        "active_session_id": None,
                     }
                 ],
+                "devices": [],
             },
         )
     ]

@@ -466,7 +466,11 @@ function requireFunction(value, name) {
 
     function syncNewSessionCwdHint() {
       const errorText = String(cwdError || "").trim();
-      const hintText = !errorText && cwdInfo && cwdInfo.will_create ? "Directory will be created when you start the session." : "";
+      const hintText = resumeSelection && resumeSelection.resumable === false
+        ? resumeSelection.resume_unavailable_reason || "Conversation is unavailable."
+        : resumeSelection && resumeSelection.host_id
+        ? `Continue on ${resumeSelection.host_name || resumeSelection.owner_host}.`
+        : !errorText && cwdInfo && cwdInfo.will_create ? "Directory will be created when you start the session." : "";
       const text = errorText || hintText;
       cwdField.classList.toggle("error", !!errorText);
       cwdHint.classList.toggle("danger", !!errorText);
@@ -598,7 +602,8 @@ function requireFunction(value, name) {
       if (!item || typeof item !== "object") return "Start fresh";
       const alias = typeof item.alias === "string" ? item.alias.trim() : "";
       const firstUser = typeof item.first_user_message === "string" ? item.first_user_message.trim() : "";
-      const primary = alias || firstUser || CodoxearDisplay.shortSessionId(item.session_id);
+      const name = typeof item.display_name === "string" ? item.display_name.trim() : "";
+      const primary = alias || name || firstUser || CodoxearDisplay.shortSessionId(item.session_id);
       const ts = Number(item.updated_ts || 0);
       const age = ts > 0 ? CodoxearDisplay.fmtRelativeAge(Math.max(0, Date.now() / 1000 - ts)) : "";
       return `${age ? `${age} | ` : ""}${primary}`;
@@ -615,8 +620,17 @@ function requireFunction(value, name) {
       syncNewSessionWorktreeUi();
     }
 
+    const resumeSearch = el("input", { class: "resumeSearch", type: "search", "aria-label": "Search conversation history", placeholder: "Search conversations, projects or devices" });
+    const resumeItems = el("div", { class: "resumeItems" });
+    resumeSearch.oninput = () => renderNewSessionResumeMenu();
+
     function renderNewSessionResumeMenu() {
-      resumeMenu.innerHTML = "";
+      if (resumeSearch.parentNode !== resumeMenu) {
+        resumeMenu.innerHTML = "";
+        resumeMenu.appendChild(resumeSearch);
+        resumeMenu.appendChild(resumeItems);
+      }
+      resumeItems.innerHTML = "";
       const freshBtn = el("button", {
         class: "fileMenuItem" + (!resumeSelection ? " active" : ""),
         type: "button",
@@ -628,22 +642,44 @@ function requireFunction(value, name) {
         closeResumeMenu();
         applyDialogMenus();
       };
-      resumeMenu.appendChild(freshBtn);
-      if (!resumeCandidates.length) {
-        resumeMenu.appendChild(el("div", { class: "pickerEmpty", text: "No matching sessions" }));
+      resumeItems.appendChild(freshBtn);
+      const query = String(resumeSearch.value || "").trim().toLocaleLowerCase();
+      const visible = resumeCandidates.filter(item => !query ||
+        [newSessionResumeLabel(item), item.cwd, item.owner_host, item.host_name].join(" ").toLocaleLowerCase().includes(query));
+      const groups = new Map();
+      for (const item of visible) {
+        const key = item.conversation_id || item.session_id;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(item);
+      }
+      const seen = new Set();
+      if (!visible.length) {
+        resumeItems.appendChild(el("div", { class: "pickerEmpty", text: "No matching sessions" }));
         return;
       }
-      for (const item of resumeCandidates) {
+      for (const item of [...groups.values()].flat()) {
+        const groupId = item.conversation_id || item.session_id;
+        if (!seen.has(groupId) && groups.get(groupId).length > 1) {
+          resumeItems.appendChild(el("div", { class: "fileMenuSection", text: `${item.display_name || "Conversation"} · ${groups.get(groupId).length} branches` }));
+        }
+        seen.add(groupId);
         if (backend() === "pi" && item.history_id && !item.resumable) {
+          if (item.host_id && item.host_online === false && !item.local_history_id) {
+            const offline = el("button", { class: "fileMenuItem", type: "button", disabled: "disabled", title: "Original device is offline; no local history copy is available" });
+            offline.appendChild(el("span", { class: "fileMenuPath", text: newSessionResumeLabel(item) }));
+            offline.appendChild(el("span", { class: "fileMenuHint", text: `${item.host_name || item.source_host} · Offline` }));
+            resumeItems.appendChild(offline);
+            continue;
+          }
           const view = el("a", {
             class: "fileMenuItem",
-            href: CodoxearUrls.resolveAppUrl(`/api/pi_history/${encodeURIComponent(item.history_id)}/view`),
+            href: CodoxearUrls.resolveAppUrl(`/api/pi_history/${encodeURIComponent(item.local_history_id || item.history_id)}/view`),
             target: "_blank", rel: "noopener",
             title: `Read-only history · ${item.source_host || "This machine"} · ${item.cwd || ""}`,
           });
           view.appendChild(el("span", { class: "fileMenuPath", text: `Read-only history · ${newSessionResumeLabel(item)}` }));
-          view.appendChild(el("span", { class: "fileMenuHint", text: item.source_host || "Directory unavailable" }));
-          resumeMenu.appendChild(view);
+          view.appendChild(el("span", { class: "fileMenuHint", text: [item.host_name || item.source_host, item.resume_unavailable_reason].filter(Boolean).join(" · ") }));
+          resumeItems.appendChild(view);
           continue;
         }
         const btn = el("button", {
@@ -652,14 +688,18 @@ function requireFunction(value, name) {
           title: `Continue conversation · ${newSessionResumeLabel(item)}`,
         });
         btn.appendChild(el("span", { class: "fileMenuPath", text: newSessionResumeLabel(item) }));
-        if (backend() === "pi" && item.cwd) btn.appendChild(el("span", { class: "fileMenuHint", text: item.cwd }));
+        if (backend() === "pi" && item.cwd) {
+          const branch = item.history_kind === "handoff" ? "Text handoff" : item.history_kind === "fork" ? "Branch" : "";
+          const state = item.active_session_id ? "Running" : "";
+          btn.appendChild(el("span", { class: "fileMenuHint", text: [item.host_name || item.owner_host, branch, state, item.cwd].filter(Boolean).join(" · ") }));
+        }
         btn.onclick = () => {
           if (backend() === "pi" && item.cwd && item.cwd !== cwdInput.value) applyNewSessionCwdSuggestion(item.cwd);
           setNewSessionResumeSelection(item);
           closeResumeMenu();
           applyDialogMenus();
         };
-        resumeMenu.appendChild(btn);
+        resumeItems.appendChild(btn);
       }
     }
 
@@ -690,7 +730,10 @@ function requireFunction(value, name) {
         const items = Array.isArray(res && res.sessions) ? res.sessions.filter((item) => item && typeof item === "object" && typeof item.session_id === "string") : [];
         resumeCandidates = items;
         const currentId = resumeSelection && typeof resumeSelection.session_id === "string" ? resumeSelection.session_id : "";
-        const next = currentId ? items.find((item) => item.session_id === currentId) || null : null;
+        const next = currentId ? items.find((item) => item.session_id === currentId) ||
+          (backendValue === "pi" && resumeSelection.history_id
+            ? { ...resumeSelection, resumable: false, active_session_id: null, resume_unavailable_reason: "Conversation is currently unavailable on its device. Select a saved copy or wait for it to reconnect." }
+            : null) : null;
         setNewSessionResumeSelection(next);
         renderNewSessionResumeMenu();
         syncNewSessionWorktreeUi();
@@ -716,6 +759,7 @@ function requireFunction(value, name) {
 
     function clearNewSessionResumeCandidates() {
       resumeCandidates = [];
+      resumeSearch.value = "";
     }
 
     function currentResumeSelection() {
@@ -747,7 +791,8 @@ function requireFunction(value, name) {
       worktreeField.style.display = canOffer ? "" : "none";
       worktreeInput.disabled = !enabled;
       worktreeInput.style.display = enabled ? "" : "none";
-      if (resumeSelection) startBtn.textContent = "Resume session";
+      if (resumeSelection && resumeSelection.resumable === false) startBtn.textContent = "Unavailable";
+      else if (resumeSelection) startBtn.textContent = resumeSelection.active_session_id ? "Open session" : "Resume session";
       else if (enabled) startBtn.textContent = "Create worktree session";
       else startBtn.textContent = "Start session";
     }
@@ -835,6 +880,7 @@ function requireFunction(value, name) {
     let reasoningMenuOpen = false;
     let resumeMenuOpen = false;
     let startBusy = false;
+    let historyRefreshTimer = null;
     let returnFocusEl = null;
 
     const backdrop = el("div", { class: "modalBackdrop", id: "newSessionBackdrop" });
@@ -998,6 +1044,7 @@ function requireFunction(value, name) {
     }
 
     function close() {
+      if (historyRefreshTimer) { win.clearInterval(historyRefreshTimer); historyRefreshTimer = null; }
       const wasOpen = isModalTargetOpen(viewer);
       controller.disposeResumeLoadTimer(); status.textContent = ""; closeMenus(); applyDialogMenus(); backdrop.style.display = "none"; viewer.style.display = "none"; afterModalVisibilityChanged();
       const target = returnFocusEl; returnFocusEl = null;
@@ -1005,6 +1052,10 @@ function requireFunction(value, name) {
     }
 
     function open({ cwd = null, statusText = "", likeSession = null, returnFocusEl: opener = null } = {}) {
+      if (historyRefreshTimer) win.clearInterval(historyRefreshTimer);
+      historyRefreshTimer = win.setInterval(() => {
+        if (!startBusy && isModalTargetOpen(viewer)) controller.scheduleNewSessionResumeLoad();
+      }, 5000);
       const active = sessionState.get("selected");
       const current = active ? sessionForId(active) : null;
       const like = likeSession && typeof likeSession === "object" ? likeSession : null;
@@ -1021,6 +1072,11 @@ function requireFunction(value, name) {
 
     function start() {
       if (startBusy) return;
+      const selectedHistory = controller.currentResumeSelection();
+      if (backend === "pi" && selectedHistory && selectedHistory.resumable === false) {
+        status.textContent = selectedHistory.resume_unavailable_reason || "This conversation is unavailable.";
+        return;
+      }
       const cwd = String(cwdInput.value || "").trim(); const agentBackend = backend; controller.setNewSessionCwdError("");
       if (!cwd) { status.textContent = ""; controller.setNewSessionCwdError("Working directory is required."); return; }
       const parsed = controller.syncNewSessionProviderFromModelInput();
@@ -1031,7 +1087,9 @@ function requireFunction(value, name) {
       if (worktreeToggle.checked && !worktreeBranch) { status.textContent = "Branch name is required."; return; }
       status.textContent = resumeSessionId ? "Resuming..." : worktreeBranch ? "Creating worktree..." : createInTmux ? "Starting in tmux..." : "Starting...";
       let cwdStartError = false; let startErrorText = ""; startBusy = true; startBtn.disabled = true;
-      Promise.resolve(spawnSession(cwd, resumeSessionId, worktreeBranch, String(nameInput.value || "").trim(), providerChoice, model, reasoningEffort, fast, createInTmux, (error) => { if (error && error.obj && error.obj.field === "cwd") { cwdStartError = true; status.textContent = ""; controller.setNewSessionCwdError(error.message); return; } const launchId = error && error.obj && error.obj.launch_id ? String(error.obj.launch_id) : ""; startErrorText = launchId ? `${error.message} (${launchId})` : error && error.message ? error.message : "Start failed."; }, agentBackend)).then((brokerPid) => { if (brokerPid) close(); else if (!cwdStartError) status.textContent = startErrorText || "Start failed."; }).finally(() => { startBusy = false; startBtn.disabled = false; });
+      const historyName = (controller.currentResumeSelection() || {}).display_name || "";
+      const sessionName = String(nameInput.value || "").trim() || (historyName !== "Untitled conversation" ? historyName : "");
+      Promise.resolve(spawnSession(cwd, resumeSessionId, worktreeBranch, sessionName, providerChoice, model, reasoningEffort, fast, createInTmux, (error) => { if (error && error.obj && error.obj.field === "cwd") { cwdStartError = true; status.textContent = ""; controller.setNewSessionCwdError(error.message); return; } const launchId = error && error.obj && error.obj.launch_id ? String(error.obj.launch_id) : ""; startErrorText = launchId ? `${error.message} (${launchId})` : error && error.message ? error.message : "Start failed."; }, agentBackend)).then((brokerPid) => { if (brokerPid) close(); else if (!cwdStartError) status.textContent = startErrorText || "Start failed."; }).finally(() => { startBusy = false; startBtn.disabled = false; });
     }
 
     closeBtn.onclick = close; cancelBtn.onclick = close; backdrop.onclick = close; viewer.onclick = (event) => event.stopPropagation();
@@ -1075,6 +1133,7 @@ function requireFunction(value, name) {
       applyMenus,
       refreshDefaults,
       dispose() {
+        if (historyRefreshTimer) { win.clearInterval(historyRefreshTimer); historyRefreshTimer = null; }
         controller.disposeResumeLoadTimer();
         while (catalogUnsubscribers.length) catalogUnsubscribers.pop()();
       },

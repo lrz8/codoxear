@@ -219,6 +219,10 @@ That repoints the same snapshot worktree and service at the previous committed c
 
 ## Ops notes
 
+- Federation uses `~/.config/codoxear/peers.json`. Gateway IDs are `<peer-id>~<runtime-id>`; `thread_id` remains the backend-native identity. Never infer the native Pi session ID from a broker runtime ID. Forward requests only to configured peers after gateway authentication, keep worker cookies server-side, and preserve transcript text and provider state when rewriting routing fields.
+- Workers publish only local history and live sessions through `/api/peer-snapshot`, preventing recursive federation. Coalesce replicas by branch identity, preserve distinct forks, and show cached/offline state explicitly. A remote resume executes on the original worker. Native snapshots must never be silently turned into text handoffs or written over a live session.
+- macOS deployment uses the same committed-snapshot script with a LaunchAgent. Only restart that server job; preserve independent broker processes. `CODOXEAR_SKIP_BOOT_CHECK=1` keeps behavioral verification in Docker while deployment checks the required unauthenticated HTTP boundary.
+
 - Restarting `codoxear.server` does **not** lose session content. Sessions live in backend log files on disk; the server only reads them.
 - To avoid losing live sessions, **only** restart the server service. Do **not** kill `codoxear-broker` or the underlying backend CLI process.
 - The supported service operation is `systemctl --user restart codoxear-server.service`; deploys must use `scripts/deploy.sh <commit-ish>` above.

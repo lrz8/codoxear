@@ -350,6 +350,12 @@
         if (backendSupportsFast(backend) && fast) body.service_tier = "fast";
         if (createInTmux) body.create_in_tmux = true;
         const res = await api("/api/sessions", { method: "POST", body });
+        if (res && res.existing_session_id) {
+          await refreshSessions();
+          await selectSession(String(res.existing_session_id));
+          setToast("opened existing conversation");
+          return String(res.existing_session_id);
+        }
         if (res && res.pending && res.launch_id) {
           setToast(createInTmux ? "tmux session still starting" : "session still starting");
           await refreshSessions();
@@ -364,7 +370,7 @@
         setToast(`${doneLabel} (broker ${brokerPid})`);
         for (let i = 0; i < 60; i++) {
           const sessions = await refreshSessions();
-          let found = (sessions || []).find((x) => Number(x.broker_pid || 0) === brokerPid);
+          let found = (sessions || []).find((x) => Number(x.broker_pid || 0) === brokerPid && String(x.host_id || "") === String(res.session_host || ""));
           if (found) {
             if (alias && String(found.alias || "").trim() !== alias) {
               await api(`/api/sessions/${found.session_id}/rename`, { method: "POST", body: { name: alias } });

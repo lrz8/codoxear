@@ -25,6 +25,7 @@ from .queue_routes import handle_queue_get_route
 from .queue_routes import handle_queue_post_route
 from .session_routes import handle_session_get_route
 from .session_routes import handle_session_post_route
+from .federation import proxy_session
 from .session_snapshot_routes import handle_snapshot_delete_route
 from .session_snapshot_routes import handle_snapshot_get_route
 from .session_snapshot_routes import handle_snapshot_post_route
@@ -161,6 +162,8 @@ class CodoxearHandler(http.server.BaseHTTPRequestHandler):
                 return
             url, path = parsed
             manager = self.deps.manager()
+            if proxy_session(self, path=path, query=url.query, deps=self.deps.session_route_deps()):
+                return
             if self._handle_static_get(path, url.query):
                 return
             if handle_auth_get_route(self, path=path, deps=self.deps.auth_route_deps()):
@@ -260,6 +263,8 @@ class CodoxearHandler(http.server.BaseHTTPRequestHandler):
                 return
             url, path = parsed
             manager = self.deps.manager()
+            if proxy_session(self, path=path, query=url.query, deps=self.deps.session_route_deps()):
+                return
             if handle_auth_post_route(self, path=path, deps=self.deps.auth_route_deps()):
                 return
             if self._handle_voice_post(path):

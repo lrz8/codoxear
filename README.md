@@ -272,3 +272,50 @@ Backend-specific session logs live under the backend home:
 ## License
 
 MIT, see `LICENSE`.
+# Private multi-device Pi access
+
+Codoxear can act as one browser gateway for Pi sessions on several machines.
+Each machine runs its own Codoxear service and brokers; the gateway forwards
+authenticated requests to the original machine over your private network.
+Opening a conversation does not migrate its files or create a text handoff.
+
+Configure the gateway in `~/.config/codoxear/peers.json`:
+
+```json
+{
+  "peers": [
+    {
+      "id": "workstation",
+      "name": "Workstation",
+      "hostname": "workstation",
+      "url": "http://workstation.example:8744",
+      "password_file": "~/.config/codoxear/peer-keys/workstation"
+    }
+  ]
+}
+```
+
+`hostname` must match the worker's operating-system hostname. The password file
+contains its existing Codoxear password and should have mode 0600. Keep peer
+configuration, passwords, and cached history metadata out of source control.
+Bind workers to a private interface and keep the gateway as the browser entry.
+
+History is searchable by name, project, or device. Replicas of the same branch
+share one entry; native forks and older text handoffs are labeled separately.
+An online original is preferred for continuation. Offline devices retain their
+catalog, and an existing local mirror remains available for read-only viewing.
+Already running brokers are reopened rather than duplicated. A plain Pi terminal
+cannot be attached retroactively: finish it and resume through Codoxear or use
+`CODEX_WEB_AGENT_BACKEND=pi codoxear-broker --` for future terminal sessions.
+
+Deploy a committed snapshot with `scripts/deploy.sh <commit>` on Linux or macOS.
+macOS uses an existing LaunchAgent at
+`~/Library/LaunchAgents/com.lrz8.codoxear-worker.plist`; deployment updates only
+its program and working directory. `CODOXEAR_SERVICE_UNIT` overrides that path,
+`CODOXEAR_PYTHON` selects Python 3.10+, and `CODOXEAR_HEALTH_URL` selects the local
+health-check address. Worker and gateway versions should match.
+
+`scripts/verify_federation_browser.mjs` verifies the real gateway, worker, Pi CLI,
+history, tool context, model choice, broker reuse, and offline mirror behavior
+inside isolated Docker containers using a local mock model. It refuses to run
+outside Docker. Follow the container setup comments at the top of that script.

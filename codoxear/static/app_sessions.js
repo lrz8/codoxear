@@ -260,6 +260,7 @@
             el("span", { class: `ownerBadge ownerIconBadge ${session.transport === "tmux" ? "owner-tmux" : session.owned ? "owner-web" : "owner-terminal"}`, html: iconSvg(sessionLaunchIcon(session)), title: sessionLaunchLabel(session) }),
           ];
           const metadataSegments = [
+            session.host_name ? el("span", { class: "sidebarMetaLabel", text: session.host_name + (session.host_online === false ? " · Offline" : "") }) : null,
             el("span", { class: "sidebarMetaLabel", text: stateText }),
             modelText
               ? el("span", { class: "sidebarMetaData" }, [

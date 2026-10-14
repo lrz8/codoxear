@@ -2577,6 +2577,16 @@ select {
         font: inherit;
         text-decoration: none;
       }
+      #newSessionResumeMenu .resumeSearch {
+        width: 100%;
+        margin-bottom: var(--space-2);
+      }
+      #newSessionResumeMenu .fileMenuHint {
+        max-width: 45%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .fileMenuItem.active {
         background: var(--ink);
         color: var(--paper);
