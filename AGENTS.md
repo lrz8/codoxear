@@ -225,6 +225,7 @@ That repoints the same snapshot worktree and service at the previous committed c
 
 - Restarting `codoxear.server` does **not** lose session content. Sessions live in backend log files on disk; the server only reads them.
 - To avoid losing live sessions, **only** restart the server service. Do **not** kill `codoxear-broker` or the underlying backend CLI process.
+- Keep the native `pi` shell command unwrapped; use the explicit `piox` broker helper. Pi launches with `-r`/`--resume`, `-c`/`--continue`, or `--session-id` must retain their native selection behavior: adding `--session <new-file>` takes precedence and silently bypasses the picker or continuation. Verify this boundary with `scripts/verify_pi_resume_picker.py` inside Docker using the real Pi CLI.
 - The supported service operation is `systemctl --user restart codoxear-server.service`; deploys must use `scripts/deploy.sh <commit-ish>` above.
 
 ## Testing policy (absolute)

@@ -441,12 +441,13 @@ def _ensure_pi_session_arg(*, args: list[str], cwd: str, sessions_dir: Path, age
     if normalize_agent_backend(agent_backend) != "pi":
         return list(args)
     out = list(args)
+    # Pi resolves --session before its resume picker or continue flag. Injecting
+    # a new path here would silently replace the requested history workflow.
+    if any(token in {"--session", "--session-id", "--resume", "-r", "--continue", "-c"} for token in out):
+        return out
     session_dir = _pi_session_dir_from_args(args=out, cwd=cwd, sessions_dir=sessions_dir)
     if session_dir is None:
         return out
-    for token in out:
-        if token == "--session":
-            return out
     if session_dir == sessions_dir / _pi_session_dir_name(cwd):
         log_path = _pi_new_session_log_path(cwd=cwd, sessions_dir=sessions_dir)
     else:

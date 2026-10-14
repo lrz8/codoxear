@@ -310,6 +310,23 @@ read -r -k 1 option
             self.assertEqual(marker_env, str(broker.pi_active_session_marker_path))
             self.assertIsNone(broker._resume_session_id)
 
+    def test_pi_history_launches_preserve_native_session_selection(self) -> None:
+        fake_stdin = SimpleNamespace(isatty=lambda: True, fileno=lambda: 9)
+        selections = [["-r"], ["--resume"], ["-c"], ["--continue"], ["--session-id", "chosen-session"]]
+        for selection in selections:
+            for custom_dir in (False, True):
+                with self.subTest(selection=selection, custom_dir=custom_dir), tempfile.TemporaryDirectory() as td:
+                    args = selection + (["--session-dir", str(Path(td) / "custom")] if custom_dir else [])
+                    with patch("codoxear.broker.sys.stdin", fake_stdin), patch.dict(
+                        "os.environ", {"PI_HOME": td, "CODEX_WEB_RESUME_SESSION_ID": ""}, clear=False
+                    ), patch("codoxear.broker.AGENT_BACKEND", "pi"), patch(
+                        "codoxear.broker.BACKEND", get_agent_backend("pi")
+                    ), patch("codoxear.broker_launch._pi_supports_approve", return_value=True):
+                        broker = Broker(cwd="/tmp/pi-history", codex_args=args)
+                    self.assertEqual(broker.codex_args[:len(args)], args)
+                    self.assertNotIn("--session", broker.codex_args)
+                    self.assertFalse(list(Path(td).rglob("*.jsonl")))
+
     def test_read_pi_active_session_marker_rejects_paths_outside_sessions_dir(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
