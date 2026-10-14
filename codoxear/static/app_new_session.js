@@ -634,20 +634,22 @@ function requireFunction(value, name) {
         return;
       }
       for (const item of resumeCandidates) {
-        if (backend() === "pi" && item.history_id) {
+        if (backend() === "pi" && item.history_id && !item.resumable) {
           const view = el("a", {
-            class: "fileMenuItem", text: `View history · ${newSessionResumeLabel(item)}`,
+            class: "fileMenuItem",
             href: CodoxearUrls.resolveAppUrl(`/api/pi_history/${encodeURIComponent(item.history_id)}/view`),
             target: "_blank", rel: "noopener",
-            title: `${item.source_host || "This machine"} · ${item.cwd || ""}`,
+            title: `Read-only history · ${item.source_host || "This machine"} · ${item.cwd || ""}`,
           });
+          view.appendChild(el("span", { class: "fileMenuPath", text: `Read-only history · ${newSessionResumeLabel(item)}` }));
+          view.appendChild(el("span", { class: "fileMenuHint", text: item.source_host || "Directory unavailable" }));
           resumeMenu.appendChild(view);
-          if (!item.resumable) continue;
+          continue;
         }
         const btn = el("button", {
           class: "fileMenuItem" + (resumeSelection && resumeSelection.session_id === item.session_id ? " active" : ""),
           type: "button",
-          title: newSessionResumeLabel(item),
+          title: `Continue conversation · ${newSessionResumeLabel(item)}`,
         });
         btn.appendChild(el("span", { class: "fileMenuPath", text: newSessionResumeLabel(item) }));
         if (backend() === "pi" && item.cwd) btn.appendChild(el("span", { class: "fileMenuHint", text: item.cwd }));

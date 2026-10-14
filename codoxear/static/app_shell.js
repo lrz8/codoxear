@@ -386,7 +386,7 @@ function requireFunction(value, name) {
 </ul>
 <div class="muted">New session</div>
 <ul class="md">
-  <li><b>New session</b> can start fresh or resume a conversation. Pi lists history across all projects, including synchronized mirrors you can open with <b>View history</b>.</li>
+  <li><b>New session</b> can start fresh or resume a conversation. Select a Pi conversation, then click <b>Resume session</b> to continue here. Synchronized mirrors that cannot be resumed are labeled <b>Read-only history</b>.</li>
   <li>The backend tabs choose between the supported agent backends. Right now that is <b>Codex</b>, <b>Pi</b>, and <b>Claude</b>.</li>
   <li>You can choose working directory, a combined provider/model pair, reasoning level, and whether the session should start in tmux. If the directory is a Git repo, you can also start in a new worktree branch.</li>
   <li>For Pi, the reasoning level is set when the session launches. To change it later on a live session, type <b>/effort</b> in the composer; <b>/thinking</b> remains an alias (see Messages and queue).</li>

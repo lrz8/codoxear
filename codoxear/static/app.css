@@ -2572,6 +2572,11 @@ select {
       .fileMenuItem + .fileMenuItem {
         border-top: 1px solid var(--border-faint);
       }
+      #newSessionResumeMenu a.fileMenuItem {
+        color: inherit;
+        font: inherit;
+        text-decoration: none;
+      }
       .fileMenuItem.active {
         background: var(--ink);
         color: var(--paper);
